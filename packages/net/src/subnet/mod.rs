@@ -25,6 +25,13 @@ const DHCP_CLIENT: u16 = 68;
 const DNS: u16 = 53;
 const NTP: u16 = 123;
 
+/// The last second a row can write, 9999-12-31T23:59:59Z, in seconds from 1970: RFC 3339 5.6
+/// has a four-digit year.
+const LAST_SECOND: u64 = 253_402_300_799;
+/// The latest epoch, whose clock is still within [`LAST_SECOND`] at the end of the longest
+/// run, 2^64 ps.
+pub(crate) const MAX_EPOCH: u64 = LAST_SECOND - u64::MAX / 1_000_000_000_000;
+
 /// The subnet behind the access point, which every copy of a network shares. Its router is the
 /// gateway, the DHCP server, the DNS server and the SNTP server, at the access point's BSSID.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -40,7 +47,8 @@ pub struct Subnet {
     /// The names DNS answers with the router's address. Every other name is NXDOMAIN. Case
     /// does not matter.
     pub names: Vec<String>,
-    /// The seconds from 1970-01-01T00:00:00Z the network's clock reads at time 0.
+    /// The seconds from 1970-01-01T00:00:00Z the network's clock reads at time 0. At most
+    /// 253383854055, so the clock stays before year 10000 for the longest run, 2^64 ps.
     pub epoch: u64,
 }
 
@@ -85,8 +93,8 @@ impl Default for Subnet {
 }
 
 impl Subnet {
-    /// Whether its mask is contiguous, and its leases are host addresses of its subnet apart
-    /// from the router's.
+    /// Whether its mask is contiguous, its leases are host addresses of its subnet apart from
+    /// the router's, and its epoch is at most [`MAX_EPOCH`].
     pub(crate) fn is_valid(&self) -> bool {
         let mask = u32::from(self.mask);
         let net = u32::from(self.router) & mask;
@@ -95,6 +103,7 @@ impl Subnet {
         let last = first.checked_add(u32::from(self.leases)).map(|end| end - 1);
         mask.leading_ones() + mask.trailing_zeros() == 32
             && self.leases > 0
+            && self.epoch <= MAX_EPOCH
             && host(u32::from(self.router))
             && last.is_some_and(|last| {
                 host(first) && host(last) && !(first..=last).contains(&u32::from(self.router))
@@ -148,8 +157,10 @@ pub(crate) fn answer(
     Some(Answer { msdu, event })
 }
 
-/// An ARP Request for the router's address gets a Reply from the router. A probe, whose sender
-/// address is 0.0.0.0 (RFC 5227 2.1.1), and an announcement of the router's own address get
+/// An ARP Request for the router's address gets a Reply from the router. So does a probe for
+/// it, whose sender address is 0.0.0.0 (RFC 5227 2.1.1), since the router defends its address
+/// (RFC 5227 2.4): the Reply goes to the prober's hardware address with target address
+/// 0.0.0.0. A probe for any other address and an announcement of the router's own address get
 /// none, so a station keeps the address it probes.
 fn arp(subnet: &Subnet, router: Mac, packet: &[u8]) -> Option<Vec<u8>> {
     // Ethernet and IPv4 addresses, and the Request opcode.
@@ -157,11 +168,7 @@ fn arp(subnet: &Subnet, router: Mac, packet: &[u8]) -> Option<Vec<u8>> {
     let sha = packet.get(8..14)?;
     let spa = ipv4_at(packet, 14)?;
     let tpa = ipv4_at(packet, 24)?;
-    if head != [0, 1, 8, 0, 6, 4, 0, 1]
-        || tpa != subnet.router
-        || spa.is_unspecified()
-        || spa == subnet.router
-    {
+    if head != [0, 1, 8, 0, 6, 4, 0, 1] || tpa != subnet.router || spa == subnet.router {
         return None;
     }
     let mut reply = vec![0, 1, 8, 0, 6, 4, 0, 2];
@@ -432,7 +439,8 @@ pub(crate) mod tests {
     }
 
     // RFC 826: the Reply swaps the sender and target, with the router's hardware address.
-    // RFC 5227 2.1.1: a probe has sender address 0.0.0.0 and gets no answer.
+    // RFC 5227 2.1.1: a probe has sender address 0.0.0.0, and one for another address, such as
+    // the station's own lease, gets no answer.
     #[test]
     fn arp_answers_for_the_router_only() {
         let subnet = Subnet::default();
@@ -450,13 +458,66 @@ pub(crate) mod tests {
         assert_eq!(reply.msdu, msdu(ARP, &want));
         for (spa, tpa) in [
             ([0, 0, 0, 0], [192, 168, 1, 100]),
-            ([0, 0, 0, 0], [192, 168, 1, 1]),
+            ([0, 0, 0, 0], [192, 168, 1, 7]),
             ([192, 168, 1, 100], [192, 168, 1, 100]),
             ([192, 168, 1, 100], [192, 168, 1, 7]),
             ([192, 168, 1, 1], [192, 168, 1, 1]),
         ] {
             assert!(ask(&subnet, &mut vec![], &arp_request(spa, tpa)).is_none());
         }
+    }
+
+    // RFC 5227 2.4: the router defends its own address, so a probe for it gets a Reply, which
+    // goes to the prober's hardware address with target address 0.0.0.0, the probe's sender.
+    #[test]
+    fn a_probe_for_the_routers_address_gets_a_reply() {
+        let subnet = Subnet::default();
+        let reply = ask(
+            &subnet,
+            &mut vec![],
+            &arp_request([0, 0, 0, 0], [192, 168, 1, 1]),
+        )
+        .unwrap();
+        let mut want = vec![0, 1, 8, 0, 6, 4, 0, 2];
+        want.extend(ROUTER.0);
+        want.extend([192, 168, 1, 1]);
+        want.extend(STA.0);
+        want.extend([0, 0, 0, 0]);
+        assert_eq!(reply.msdu, msdu(ARP, &want));
+    }
+
+    // The clock's last second must be one a row can write, 9999-12-31T23:59:59Z (RFC 3339 5.6
+    // has a four-digit year), at the end of the longest run, 2^64 ps.
+    #[test]
+    fn the_epoch_is_bounded_by_the_longest_run() {
+        let with = |epoch| Subnet {
+            epoch,
+            ..Subnet::default()
+        };
+        assert_eq!(MAX_EPOCH, 253_383_854_055);
+        assert!(with(MAX_EPOCH).is_valid());
+        assert!(!with(MAX_EPOCH + 1).is_valid());
+        assert!(!with(u64::MAX).is_valid());
+        let sta = Ipv4Addr::new(192, 168, 1, 100);
+        let request = udp_msdu(
+            sta,
+            123,
+            Ipv4Addr::new(192, 168, 1, 1),
+            NTP,
+            &sntp::tests::request(),
+        );
+        let late = Time::from_ps(u64::MAX);
+        let subnet = with(MAX_EPOCH);
+        let answer = answer(&subnet, &mut vec![], ROUTER, late, STA, ROUTER, &request).unwrap();
+        let row = crate::Row {
+            at: late,
+            event: answer.event.unwrap(),
+        };
+        assert!(
+            row.json().contains(r#""sent":"9999-12-31T23:59:59."#),
+            "{}",
+            row.json()
+        );
     }
 
     #[test]

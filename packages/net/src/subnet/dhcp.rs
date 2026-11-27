@@ -1,6 +1,6 @@
 //! The router's DHCP server (RFC 2131), with the options of RFC 2132 that lwIP's client reads.
-//! A station's first DISCOVER or REQUEST takes the next free lease, and the station keeps it
-//! for good, so it gets the same address each time it asks.
+//! A station's first DISCOVER takes the next free lease, and the station keeps it for good, so
+//! it gets the same address each time it asks.
 
 use std::net::Ipv4Addr;
 
@@ -44,7 +44,9 @@ struct Options {
     server: Option<Ipv4Addr>,
 }
 
-/// The options after the cookie, or `None` when one runs past the message.
+/// The options after the cookie, or `None` when one runs past the message, or one the server
+/// reads has the wrong length: 1 octet for the message type, and 4 for the Requested IP
+/// Address and the Server Identifier (RFC 2132 9.6, 9.1, 9.7).
 fn options(mut o: &[u8]) -> Option<Options> {
     let mut out = Options::default();
     loop {
@@ -55,9 +57,9 @@ fn options(mut o: &[u8]) -> Option<Options> {
                 let data = rest.get(..usize::from(*len))?;
                 let address = || Some(Ipv4Addr::from(<[u8; 4]>::try_from(data).ok()?));
                 match *code {
-                    MESSAGE_TYPE => out.kind = data.first().copied(),
-                    REQUESTED_ADDRESS => out.requested = address(),
-                    SERVER_ID => out.server = address(),
+                    MESSAGE_TYPE => out.kind = Some(<[u8; 1]>::try_from(data).ok()?[0]),
+                    REQUESTED_ADDRESS => out.requested = Some(address()?),
+                    SERVER_ID => out.server = Some(address()?),
                     _ => {}
                 }
                 o = &rest[data.len()..];
@@ -69,22 +71,28 @@ fn options(mut o: &[u8]) -> Option<Options> {
 
 /// The station's lease, taken now if it has none, or `None` when every lease is taken.
 fn lease(subnet: &Subnet, leased: &mut Vec<Mac>, sta: Mac) -> Option<Ipv4Addr> {
-    let index = match leased.iter().position(|&m| m == sta) {
-        Some(index) => index,
-        None if leased.len() < usize::from(subnet.leases) => {
-            leased.push(sta);
-            leased.len() - 1
-        }
-        None => return None,
-    };
+    if let Some(ip) = recorded(subnet, leased, sta) {
+        return Some(ip);
+    }
+    if leased.len() < usize::from(subnet.leases) {
+        leased.push(sta);
+        return recorded(subnet, leased, sta);
+    }
+    None
+}
+
+/// The station's lease, if it has one.
+fn recorded(subnet: &Subnet, leased: &[Mac], sta: Mac) -> Option<Ipv4Addr> {
+    let index = leased.iter().position(|&m| m == sta)?;
     Some(subnet.lease(index))
 }
 
 /// The answer to the DHCP message `message` from station `sta`: where it goes, the message,
-/// and its row. A DISCOVER gets an OFFER of the station's lease. A REQUEST gets an ACK when it
-/// asks for that address, in its Requested IP Address option or its `ciaddr`, and a NAK when
-/// it asks for another. A REQUEST that names another server, a message relayed by an agent,
-/// and every other message type are dropped.
+/// and its row. A DISCOVER gets an OFFER of the station's lease. A REQUEST from a station with
+/// a lease gets an ACK when it asks for that address, in its Requested IP Address option or
+/// its `ciaddr`, and a NAK when it asks for another. A REQUEST from a station with no lease
+/// on record gets no answer and takes no lease (RFC 2131 4.3.2). A REQUEST that names another
+/// server, a message relayed by an agent, and every other message type are dropped.
 pub(super) fn answer(
     subnet: &Subnet,
     leased: &mut Vec<Mac>,
@@ -113,8 +121,8 @@ pub(super) fn answer(
             let asked = options
                 .requested
                 .or((!ciaddr.is_unspecified()).then_some(ciaddr))?;
-            match lease(subnet, leased, sta) {
-                Some(ip) if ip == asked => (ACK, ip, Some(Event::DhcpAck { sta, ip })),
+            match recorded(subnet, leased, sta)? {
+                ip if ip == asked => (ACK, ip, Some(Event::DhcpAck { sta, ip })),
                 _ => (
                     NAK,
                     Ipv4Addr::UNSPECIFIED,
@@ -322,6 +330,14 @@ pub(crate) mod tests {
         let mut leased = Vec::new();
         let (any, all) = (Ipv4Addr::UNSPECIFIED, Ipv4Addr::BROADCAST);
         let wrong = Ipv4Addr::new(192, 168, 1, 150);
+        send(
+            &subnet,
+            &mut leased,
+            any,
+            all,
+            &request(DISCOVER, None, None),
+        )
+        .unwrap();
         let init_reboot = request(REQUEST, Some(wrong), None);
         let (dst, nak, event) = send(&subnet, &mut leased, any, all, &init_reboot).unwrap();
         assert_eq!(
@@ -377,15 +393,88 @@ pub(crate) mod tests {
         let discover = request(DISCOVER, None, None);
         let other = Mac([2, 0, 0, 0, 0, 9]);
         assert!(answer(&subnet, &mut leased, other, &discover).is_none());
-        // The full pool NAKs a REQUEST from a station with no lease.
-        let (_, _, event) = answer(
-            &subnet,
-            &mut leased,
-            other,
-            &request(REQUEST, Some(Ipv4Addr::new(192, 168, 1, 101)), None),
-        )
-        .unwrap();
-        assert!(matches!(event, Some(Event::DhcpNak { .. })));
+        // A REQUEST from a station with no lease is not answered, full pool or not.
+        let asked = request(REQUEST, Some(Ipv4Addr::new(192, 168, 1, 101)), None);
+        assert!(answer(&subnet, &mut leased, other, &asked).is_none());
+    }
+
+    // RFC 2131 4.3.2: a server with no record of the client stays silent on its INIT-REBOOT
+    // REQUEST, right address or wrong, and it takes no lease for it. Nor does a REQUEST that
+    // names it with no OFFER before, or one from a client that says it has an address.
+    #[test]
+    fn a_station_with_no_lease_gets_no_answer_to_a_request() {
+        let subnet = Subnet {
+            leases: 1,
+            ..Subnet::default()
+        };
+        let mut leased = Vec::new();
+        for asked in [Ipv4Addr::new(192, 168, 1, 150), subnet.first_lease] {
+            for server in [None, Some(subnet.router)] {
+                let m = request(REQUEST, Some(asked), server);
+                assert!(
+                    answer(&subnet, &mut leased, STA, &m).is_none(),
+                    "{asked} {server:?}"
+                );
+            }
+            let renewing = message(REQUEST, asked, None, None, 0);
+            assert!(answer(&subnet, &mut leased, STA, &renewing).is_none());
+        }
+        assert!(leased.is_empty());
+        // So the one lease is still free for the next station.
+        let other = Mac([2, 0, 0, 0, 0, 9]);
+        let (_, offer, _) =
+            answer(&subnet, &mut leased, other, &request(DISCOVER, None, None)).unwrap();
+        assert_eq!(ipv4_at(&offer, 16), Some(subnet.first_lease));
+    }
+
+    // RFC 2132 9.6, 9.1 and 9.7: the message type is 1 octet, and the Requested IP Address and
+    // the Server Identifier are 4. A message with one of another length is malformed, and is
+    // dropped rather than read as if the option were absent.
+    #[test]
+    fn an_option_of_the_wrong_length_drops_the_message() {
+        let subnet = Subnet::default();
+        let mut leased = vec![STA];
+        let lease = subnet.first_lease.octets();
+        let with = |kind: u8, code: u8, data: &[u8]| {
+            let mut m = request(kind, None, None);
+            assert_eq!(m.pop(), Some(END));
+            m.extend([code, data.len() as u8]);
+            m.extend(data);
+            m.push(END);
+            m
+        };
+        let good = with(REQUEST, SERVER_ID, &subnet.router.octets());
+        let mut good = good[..good.len() - 1].to_vec();
+        good.extend([REQUESTED_ADDRESS, 4]);
+        good.extend(lease);
+        good.push(END);
+        assert!(answer(&subnet, &mut leased, STA, &good).is_some());
+        for data in [&[][..], &[192, 168, 1], &[192, 168, 1, 1, 0]] {
+            for code in [SERVER_ID, REQUESTED_ADDRESS] {
+                let mut m = with(REQUEST, code, data);
+                m.pop();
+                let other = if code == SERVER_ID {
+                    REQUESTED_ADDRESS
+                } else {
+                    SERVER_ID
+                };
+                m.extend([other, 4]);
+                m.extend(if other == SERVER_ID {
+                    subnet.router.octets()
+                } else {
+                    lease
+                });
+                m.push(END);
+                assert!(
+                    answer(&subnet, &mut leased, STA, &m).is_none(),
+                    "{code} {data:?}"
+                );
+            }
+        }
+        let mut long_type = request(DISCOVER, None, None);
+        long_type[OPTIONS + 1] = 2;
+        long_type.insert(OPTIONS + 3, 0);
+        assert!(answer(&subnet, &mut leased, STA, &long_type).is_none());
     }
 
     #[test]
@@ -394,7 +483,9 @@ pub(crate) mod tests {
         assert!(options(&[MESSAGE_TYPE]).is_none());
         let o = options(&[PAD, MESSAGE_TYPE, 1, 3, END, 0xff, 0xff]).unwrap();
         assert_eq!(o.kind, Some(3));
-        // An address option of the wrong length is no address.
-        assert_eq!(options(&[SERVER_ID, 3, 1, 2, 3]).unwrap().server, None);
+        // An option the server reads of the wrong length drops the message.
+        assert!(options(&[SERVER_ID, 3, 1, 2, 3]).is_none());
+        assert!(options(&[REQUESTED_ADDRESS, 5, 1, 2, 3, 4, 5]).is_none());
+        assert!(options(&[MESSAGE_TYPE, 0]).is_none());
     }
 }

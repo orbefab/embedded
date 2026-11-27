@@ -9,6 +9,7 @@ use common::{
     keyed_network, ms, network, open_subnet_session, subnet_session,
 };
 use orbe_model::Time;
+use orbe_model::air::{AirFrame, Ofdm, Preamble, Rate};
 use orbe_net::{Config, Mac, Network, Security, Subnet};
 
 fn run(script: Script, until: Time, mut net: Network) -> Air {
@@ -17,8 +18,8 @@ fn run(script: Script, until: Time, mut net: Network) -> Air {
     air
 }
 
-/// The router's answers, in order, as (start, MSDU).
-fn answers(air: &Air, keyed: bool) -> Vec<(Time, Vec<u8>)> {
+/// The router's answers, in order, as (frame, MSDU).
+fn answers(air: &Air, keyed: bool) -> Vec<(&AirFrame, Vec<u8>)> {
     let sta = Supplicant::new(PASSPHRASE);
     let mut pns = Vec::new();
     let out = (data_sent(air).into_iter())
@@ -33,7 +34,7 @@ fn answers(air: &Air, keyed: bool) -> Vec<(Time, Vec<u8>)> {
                 assert_eq!(f.mpdu[1], 0x02);
                 f.mpdu[24..].to_vec()
             };
-            (f.start, msdu)
+            (f, msdu)
         })
         .collect();
     if keyed {
@@ -42,8 +43,8 @@ fn answers(air: &Air, keyed: bool) -> Vec<(Time, Vec<u8>)> {
     out
 }
 
-/// Checks the answers to [`common::requests`]: one each but for the ARP probe, each started
-/// within a millisecond of its request, and the time the station sets its clock to.
+/// Checks the answers to [`common::requests`]: one each but for the ARP probe, each at 54 Mb/s
+/// and over within a millisecond of its request, and the time the station sets its clock to.
 fn check_exchange(air: &Air, keyed: bool) {
     let answers = answers(air, keyed);
     let times = [
@@ -56,13 +57,33 @@ fn check_exchange(air: &Air, keyed: bool) {
         at::NXDOMAIN,
     ];
     assert_eq!(answers.len(), times.len(), "{answers:02x?}");
-    for ((start, _), at) in answers.iter().zip(times) {
+    for ((f, _), at) in answers.iter().zip(times) {
         assert!(
-            ms(at) < *start && *start < ms(at + 1.0),
-            "{start:?} for the request at {at} ms"
+            ms(at) < f.start && f.end < ms(at + 1.0),
+            "{:?} to {:?} for the request at {at} ms",
+            f.start,
+            f.end
         );
+        // The station offers 54 Mb/s, the access point's fastest rate. Its Duration is SIFS
+        // and a 34 us ACK at 24 Mb/s, the fastest mandatory rate at or below 54 (10.6.6.5).
+        assert_eq!(f.rate, Rate::Ofdm(Ofdm::M54));
+        assert_eq!(f.mpdu[2..4], 44u16.to_le_bytes());
     }
     let mut answers = answers.into_iter().map(|(_, msdu)| msdu);
+    // Management frames go at 1 Mb/s, the lowest basic rate, and EAPOL-Key frames at 54.
+    for f in air.sent() {
+        let (rate, duration) = if f.mpdu[0] == 0x08 {
+            (Rate::Ofdm(Ofdm::M54), 44u16)
+        } else {
+            (Rate::Dsss1, 314)
+        };
+        assert_eq!(
+            (f.rate, &f.mpdu[2..4]),
+            (rate, &duration.to_le_bytes()[..]),
+            "{:02x?}",
+            f.mpdu
+        );
+    }
 
     // DHCP (RFC 2131): the OFFER and the ACK of the first lease, to that address, with the
     // server, the lease time, the mask, the router and the DNS server.
@@ -268,4 +289,108 @@ fn only_an_associated_station_past_the_controlled_port_is_answered() {
     let script = script.send(ms(50.0), clear(STA, Mac::BROADCAST, &discover));
     let air = run(script, ms(60.0), keyed_network());
     assert!(data_sent(&air).is_empty());
+}
+
+// A station that offers only 1 and 2 Mb/s, as an 802.11 DSSS station does, gets its Data
+// frames at 2 Mb/s with the long preamble, the access point's Capability Information having no
+// Short Preamble. Their Duration is SIFS and a 248 us ACK at 2 Mb/s. Management frames stay at
+// 1 Mb/s.
+#[test]
+fn a_station_that_offers_only_1_and_2_mbps_gets_2_mbps() {
+    let discover = lan::dhcp(lan::DISCOVER, [0; 4], None, None);
+    let script = Script::default()
+        .send(ms(10.0), common::auth(0, 1))
+        .send(
+            ms(11.0),
+            common::assoc_rates(common::SSID, None, &[0x82, 0x84], &[]),
+        )
+        .send(ms(12.0), clear(STA, Mac::BROADCAST, &discover));
+    let air = run(script, ms(20.0), network(Security::Open));
+    let sent = air.sent();
+    assert_eq!(sent.len(), 3);
+    for f in &sent[..2] {
+        assert_eq!(f.rate, Rate::Dsss1);
+    }
+    let offer = sent[2];
+    let two = Rate::Dsss2(Preamble::Long);
+    assert_eq!(offer.rate, two);
+    assert_eq!(
+        offer.end.as_ps() - offer.start.as_ps(),
+        two.airtime(offer.mpdu.len() + 4)
+    );
+    assert_eq!(offer.mpdu[2..4], 258u16.to_le_bytes());
+    let (_, _, _, reply) = lan::read_udp(&offer.mpdu[24..]);
+    assert_eq!(lan::dhcp_options(&reply).0, lan::OFFER);
+}
+
+// The answers go at a rate the access point advertises: its Association Response names 54
+// Mb/s, and 1 Mb/s, where management frames go, as basic.
+#[test]
+fn the_access_point_advertises_the_rates_it_sends_at() {
+    let (script, until) = open_subnet_session();
+    let air = run(script, until, network(Security::Open));
+    let response = air.sent()[1];
+    assert_eq!(response.mpdu[0], 0x10);
+    // After Capability Information, Status Code and AID: Supported Rates, then Extended.
+    let mut body = &response.mpdu[24 + 6..];
+    let mut rates = Vec::new();
+    while let [id, len, rest @ ..] = body {
+        let (contents, after) = rest.split_at(usize::from(*len));
+        if *id == 1 || *id == 50 {
+            rates.extend(contents);
+        }
+        body = after;
+    }
+    assert!(rates.contains(&0x82));
+    assert!(rates.contains(&0x6c));
+}
+
+// The network's clock must stay within what its rows write, a four-digit year (RFC 3339 5.6),
+// for the longest run: so an epoch near the end of u64 is refused, which would overflow.
+#[test]
+fn an_epoch_past_year_9999_is_refused() {
+    let config = Config::new(common::SSID, BSSID, common::channel(), Security::Open).unwrap();
+    for epoch in [u64::MAX, 253_402_300_800] {
+        let subnet = Subnet {
+            epoch,
+            ..Subnet::default()
+        };
+        assert!(config.clone().with_subnet(subnet).is_none(), "{epoch}");
+    }
+}
+
+// 11.2.3.2: a station that wakes by sending a Data frame gets the frames held for it
+// before the answer to that frame, in the order the router made them.
+#[test]
+fn a_station_that_wakes_gets_its_held_frames_first() {
+    let dozing = |mut f: Vec<u8>| {
+        f[1] |= 0x10;
+        f
+    };
+    let script = Script::default()
+        .send(ms(10.0), common::auth(0, 1))
+        .send(ms(11.0), common::assoc(common::SSID, None))
+        .send(ms(20.0), common::null(true))
+        .send(
+            ms(30.0),
+            dozing(clear(STA, BSSID, &lan::ping(1, 1, b"one"))),
+        )
+        .doze(ms(30.5), ms(39.5))
+        .send(ms(40.0), clear(STA, BSSID, &lan::ping(1, 2, b"two")));
+    let air = run(script, ms(50.0), network(Security::Open));
+    let echoes: Vec<_> = (data_sent(&air).into_iter())
+        .map(|f| {
+            let (protocol, _, echo) = lan::read_ipv4(&f.mpdu[24..]);
+            assert_eq!(protocol, 1);
+            assert!(f.start > ms(40.0));
+            echo[4..].to_vec()
+        })
+        .collect();
+    assert_eq!(
+        echoes,
+        [
+            b"\x00\x01\x00\x01one".to_vec(),
+            b"\x00\x01\x00\x02two".to_vec()
+        ]
+    );
 }

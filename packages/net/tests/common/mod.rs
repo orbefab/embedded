@@ -104,13 +104,31 @@ pub fn auth(algorithm: u16, sequence: u16) -> Vec<u8> {
     management(11, 0, &body)
 }
 
-/// An Association Request for `ssid`, with `rsne` when given.
+/// The Supported Rates and Extended Supported Rates of the capture's station: every ERP rate,
+/// up to 54 Mb/s.
+pub const STA_RATES: [u8; 8] = [0x82, 0x84, 0x8b, 0x96, 0x24, 0x30, 0x48, 0x6c];
+pub const STA_EXTENDED: [u8; 4] = [0x0c, 0x12, 0x18, 0x60];
+
+/// An Association Request for `ssid`, with `rsne` when given, offering the rates of the
+/// capture's station.
 pub fn assoc(ssid: &[u8], rsne: Option<&[u8]>) -> Vec<u8> {
+    assoc_rates(ssid, rsne, &STA_RATES, &STA_EXTENDED)
+}
+
+/// An Association Request for `ssid`, with `rsne` when given, offering `rates` and, when not
+/// empty, `extended`, in the order of frame 82 of the capture.
+pub fn assoc_rates(ssid: &[u8], rsne: Option<&[u8]>, rates: &[u8], extended: &[u8]) -> Vec<u8> {
     let mut body = vec![0x31, 0x04, 0x0a, 0x00, 0, ssid.len() as u8];
     body.extend(ssid);
+    body.extend([1, rates.len() as u8]);
+    body.extend(rates);
     if let Some(rsne) = rsne {
         body.extend([48, rsne.len() as u8]);
         body.extend(rsne);
+    }
+    if !extended.is_empty() {
+        body.extend([50, extended.len() as u8]);
+        body.extend(extended);
     }
     management(0, 0, &body)
 }

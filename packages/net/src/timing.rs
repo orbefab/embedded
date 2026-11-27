@@ -1,7 +1,7 @@
 //! When the access point may send: the interframe spaces, the acknowledgement it waits for, and
 //! the beacon interval.
 
-use orbe_model::air::{Ofdm, Rate};
+use orbe_model::air::{Ofdm, Preamble, Rate};
 
 pub(crate) const US: u64 = 1_000_000;
 const MS: u64 = 1000 * US;
@@ -31,8 +31,43 @@ pub(crate) const EAPOL_FIRST: u64 = 100 * MS;
 pub(crate) const EAPOL_NEXT: u64 = 1000 * MS;
 pub(crate) const EAPOL_SENDS: u8 = 4;
 
-/// The rate the access point sends every frame at, 1 Mb/s with the long preamble.
-pub(crate) const RATE: Rate = Rate::Dsss1;
+/// The lowest basic rate, 1 Mb/s with the long preamble, which every station in the BSS takes.
+/// The access point sends at it what carries no MSDU to one station: Beacons, Probe Responses
+/// and every other Management frame, group frames and Null frames. The access point of
+/// Wireshark's `wpa-Induction.pcap` sends its Management and group Data frames at 1 Mb/s too,
+/// and its Data frames to the station, EAPOL-Key ones included, at 36 to 54 Mb/s.
+pub(crate) const BASIC: Rate = Rate::Dsss1;
+
+/// The rate the access point sends a station its Data frames with a body at: the fastest of
+/// [`element::RATES`](crate::element::RATES) and
+/// [`element::EXTENDED`](crate::element::EXTENDED) that the station's Supported Rates and
+/// Extended Supported Rates also name, given as `rates`, in 500 kb/s, the basic bit masked
+/// off. The long preamble goes with a DSSS or CCK rate, since the access point's Capability
+/// Information does not offer Short Preamble. With no rate in common it is [`BASIC`], which a
+/// station that joined takes.
+pub(crate) fn data_rate(rates: impl Iterator<Item = u8>) -> Rate {
+    let ours = |rate: &u8| {
+        let mut all = crate::element::RATES
+            .iter()
+            .chain(&crate::element::EXTENDED);
+        all.any(|r| r & 0x7f == *rate)
+    };
+    // A rate in 500 kb/s orders as its speed.
+    match rates.filter(ours).max() {
+        Some(4) => Rate::Dsss2(Preamble::Long),
+        Some(11) => Rate::Cck5_5(Preamble::Long),
+        Some(22) => Rate::Cck11(Preamble::Long),
+        Some(12) => Rate::Ofdm(Ofdm::M6),
+        Some(18) => Rate::Ofdm(Ofdm::M9),
+        Some(24) => Rate::Ofdm(Ofdm::M12),
+        Some(36) => Rate::Ofdm(Ofdm::M18),
+        Some(48) => Rate::Ofdm(Ofdm::M24),
+        Some(72) => Rate::Ofdm(Ofdm::M36),
+        Some(96) => Rate::Ofdm(Ofdm::M48),
+        Some(108) => Rate::Ofdm(Ofdm::M54),
+        _ => BASIC,
+    }
+}
 
 /// An ACK frame's PSDU: Frame Control, Duration, RA and the FCS (9.3.1.3).
 const ACK_LEN: usize = 14;
@@ -67,22 +102,53 @@ pub(crate) fn acked_after(rate: Rate) -> u64 {
     SIFS + ack_rate(rate).airtime(ACK_LEN)
 }
 
-/// The Duration field of an individually addressed frame the access point sends: the
-/// microseconds of SIFS and the ACK after it, rounded up (9.2.4.2).
-pub(crate) fn duration_us() -> u16 {
-    acked_after(RATE).div_ceil(US) as u16
+/// The Duration field of an individually addressed frame the access point sends at `rate`:
+/// the microseconds of SIFS and the ACK after it, rounded up (9.2.4.2).
+pub(crate) fn duration_us(rate: Rate) -> u16 {
+    acked_after(rate).div_ceil(US) as u16
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use orbe_model::air::{Mcs, Preamble};
+    use orbe_model::air::Mcs;
 
-    // Wireshark's wpa-Induction.pcap: every individually addressed frame the 1 Mb/s access
-    // point sends has Duration 0x013a, 314 us: SIFS and a 304 us ACK.
+    // Wireshark's wpa-Induction.pcap: every individually addressed Management frame the access
+    // point sends at 1 Mb/s has Duration 0x013a, 314 us: SIFS and a 304 us ACK.
     #[test]
     fn a_frame_at_1_mbps_reserves_its_ack() {
-        assert_eq!(duration_us(), 314);
+        assert_eq!(duration_us(BASIC), 314);
+    }
+
+    // At 54 Mb/s the ACK goes at 24 Mb/s: 20 us of preamble and SIGNAL, two symbols and the
+    // 6 us signal extension. Every Data frame the capture's access point sends at 36, 48 or 54
+    // Mb/s has Duration 44.
+    #[test]
+    fn a_frame_at_54_mbps_reserves_its_ack_at_24() {
+        assert_eq!(duration_us(Rate::Ofdm(Ofdm::M54)), 10 + 34);
+    }
+
+    #[test]
+    fn data_goes_at_the_fastest_rate_both_ends_name() {
+        // The capture's station: every ERP rate, the basic bit on the DSSS and CCK ones.
+        let induction = [
+            0x82, 0x84, 0x8b, 0x96, 0x24, 0x30, 0x48, 0x6c, 0x0c, 0x12, 0x18, 0x60,
+        ];
+        let masked = |rates: &[u8]| rates.iter().map(|r| r & 0x7f).collect::<Vec<_>>();
+        assert_eq!(
+            data_rate(masked(&induction).into_iter()),
+            Rate::Ofdm(Ofdm::M54)
+        );
+        assert_eq!(data_rate([2, 4].into_iter()), Rate::Dsss2(Preamble::Long));
+        assert_eq!(
+            data_rate([2, 4, 11, 22].into_iter()),
+            Rate::Cck11(Preamble::Long)
+        );
+        assert_eq!(data_rate([12, 24, 48].into_iter()), Rate::Ofdm(Ofdm::M24));
+        // An HT selector (127) and a rate the access point lacks (3 Mb/s) are not rates in
+        // common, so a station that names only those gets the basic rate.
+        assert_eq!(data_rate([127, 6].into_iter()), BASIC);
+        assert_eq!(data_rate(std::iter::empty()), BASIC);
     }
 
     #[test]

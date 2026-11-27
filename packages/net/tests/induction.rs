@@ -19,6 +19,7 @@ use std::path::PathBuf;
 use common::{Air, BSSID, STA, Script, ms};
 use orbe_crypto::aes::AesKey;
 use orbe_model::Sha256;
+use orbe_model::air::{AirFrame, Ofdm, Rate};
 use orbe_net::{Config, Network};
 
 /// The capture's SHA-256, its name in the blob cache.
@@ -151,11 +152,16 @@ fn the_handshake_and_data_of_wpa_induction_replay() {
     let mut net = Network::new(config);
     air.run_through(&mut net, ms(10.0 * (from_station.len() + 1) as f64));
 
-    let ours: Vec<&[u8]> = (air.sent().into_iter())
+    let ours: Vec<&AirFrame> = (air.sent().into_iter())
         .filter(|f| eapol(&f.mpdu).is_some())
-        .map(|f| &f.mpdu[..])
         .collect();
     assert_eq!(ours.len(), 2, "messages 1 and 3, each once");
+    // The capture's access point sends them at 54 Mb/s, the station's fastest rate, as it
+    // sends its other Data frames.
+    for f in &ours {
+        assert_eq!(f.rate, Rate::Ofdm(Ofdm::M54));
+    }
+    let ours: Vec<&[u8]> = ours.iter().map(|f| &f.mpdu[..]).collect();
     // Message 1's last 16 octets are the PMKID of its PMKID KDE. Ours is the PMKID of
     // 12.7.1.3, HMAC-SHA1-128(PMK, "PMK Name" || AA || SPA). The capture's is not, so it is not
     // compared.
@@ -172,8 +178,9 @@ fn the_handshake_and_data_of_wpa_induction_replay() {
     ours_1[at..].copy_from_slice(&theirs_1[at..]);
     for (ours, theirs) in [(&ours_1[..], theirs_1), (ours[1], theirs_3)] {
         assert_eq!(ours.len(), theirs.len());
-        assert_eq!(ours[..2], theirs[..2]);
-        assert_eq!(ours[4..22], theirs[4..22]);
+        // All but the Sequence Control: the Duration too, 44 us for SIFS and the ACK of a 54
+        // Mb/s frame.
+        assert_eq!(ours[..22], theirs[..22]);
         assert_eq!(ours[24..], theirs[24..]);
     }
     let rows = air.rows_seen();

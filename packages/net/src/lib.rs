@@ -21,11 +21,15 @@
 //! run. Its nonces and keys come from a fixed seed, so they too are the same on every run.
 //! Nothing in the engine builds one yet.
 //!
-//! It sends every frame at 1 Mb/s, DIFS after the medium goes idle, with no random backoff. A
-//! frame no station acknowledges is not sent again, and makes a [`Event::Lost`] row. It holds
-//! no group frames for a station in power save, and it is neither HT nor QoS. It sends no group
-//! Data frame, so an answer to a station's broadcast goes to that station alone, and it does not
-//! pass frames between stations.
+//! It sends a station its Data frames, EAPOL-Key ones too, at the fastest rate both name, up
+//! to 54 Mb/s ERP-OFDM, and its management, group and Null frames at 1 Mb/s, its lowest basic
+//! rate. It sends DIFS after the medium goes idle, with no random backoff. A frame no station
+//! acknowledges is not sent again, and makes a [`Event::Lost`] row. It holds no group frames
+//! for a station in power save, and it is neither HT nor QoS. Its ERP element always says no
+//! non-ERP station is present, so it does not protect its ERP-OFDM frames even when a station
+//! that offers only DSSS or CCK rates has joined. It sends no group Data frame, so an answer to
+//! a station's broadcast goes to that station alone, and it does not pass frames between
+//! stations.
 
 mod ccmp;
 mod element;
@@ -40,7 +44,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use orbe_crypto::prf::prf;
-use orbe_model::air::{Ack, AirFrame, Channel, Signal};
+use orbe_model::air::{Ack, AirFrame, Channel, Rate, Signal};
 use orbe_model::{Stop, Time};
 
 pub use row::{By, Event, Row};
@@ -48,7 +52,7 @@ pub use subnet::Subnet;
 
 use frame::Header;
 use rsn::Ptk;
-use timing::{DIFS, RATE};
+use timing::{BASIC, DIFS};
 
 /// `ps` picoseconds after `at`.
 fn after(at: Time, ps: u64) -> Time {
@@ -168,7 +172,8 @@ impl Config {
     }
 
     /// The access point with `subnet` behind it. `None` when the subnet's mask is not
-    /// contiguous, or its leases are not host addresses of its subnet apart from the router's.
+    /// contiguous, its leases are not host addresses of its subnet apart from the router's, or
+    /// its epoch is past [`Subnet::epoch`]'s bound.
     pub fn with_subnet(mut self, subnet: Subnet) -> Option<Config> {
         subnet.is_valid().then(|| {
             self.subnet = subnet;
@@ -288,6 +293,8 @@ struct Station {
     held: VecDeque<Arc<[u8]>>,
     /// Its RSNA under WPA2-PSK, from its association.
     rsna: Option<Rsna>,
+    /// The rate of the Data frames the access point sends it, from its association.
+    rate: Rate,
 }
 
 impl Station {
@@ -297,6 +304,7 @@ impl Station {
         self.dozing = false;
         self.held.clear();
         self.rsna = None;
+        self.rate = BASIC;
     }
 }
 
@@ -552,7 +560,7 @@ impl Network {
             let interval = timing::BEACON_INTERVAL;
             self.state.tbtt =
                 Time::from_ps((start.as_ps() / interval + 1).saturating_mul(interval));
-            self.air(start, mpdu, None);
+            self.air(start, mpdu, None, BASIC);
             return true;
         }
         let pending = self.state.queue.pop_front().expect("a queued frame");
@@ -575,13 +583,17 @@ impl Network {
         if pending.polled == Some(true) {
             mpdu[1] |= frame::MORE_DATA;
         }
+        let rate = match pending.to {
+            Some(to) if frame::has_msdu(&mpdu) => self.station(to).map_or(BASIC, |s| s.rate),
+            _ => BASIC,
+        };
         if mpdu[0] >> 2 & 3 == frame::DATA && mpdu[1] & frame::PROTECTED != 0 {
             match self.seal(&mpdu) {
                 Some(sealed) => mpdu = sealed,
                 None => return true,
             }
         }
-        self.air(start, mpdu, pending.to);
+        self.air(start, mpdu, pending.to, rate);
         true
     }
 
@@ -602,15 +614,20 @@ impl Network {
         Some(ccmp::seal(tk, 0, *sent, &mpdu[..24], &mpdu[24..]))
     }
 
-    fn air(&mut self, start: Time, mut mpdu: Vec<u8>, to: Option<Mac>) {
+    /// Puts `mpdu` on the air at `rate` from `start`, to `to` or to every station. An
+    /// individually addressed frame's Duration reserves its ACK.
+    fn air(&mut self, start: Time, mut mpdu: Vec<u8>, to: Option<Mac>, rate: Rate) {
         let s = &mut self.state;
         s.sequence = (s.sequence + 1) & 0xfff;
         frame::set_sequence(&mut mpdu, s.sequence);
+        if to.is_some() {
+            frame::set_duration(&mut mpdu, timing::duration_us(rate));
+        }
         let frame = AirFrame {
             start,
-            end: after(start, RATE.airtime(mpdu.len() + 4)),
+            end: after(start, rate.airtime(mpdu.len() + 4)),
             channel: self.config.channel,
-            rate: RATE,
+            rate,
             mpdu: mpdu.into(),
         };
         s.airing = Some((frame, to));
@@ -635,19 +652,7 @@ impl Network {
     }
 
     fn send(&mut self, at: Time, subtype: u8, to: Mac, body: &[u8]) {
-        let duration = if to.is_group() {
-            0
-        } else {
-            timing::duration_us()
-        };
-        let mut mpdu = frame::header(
-            frame::MANAGEMENT,
-            subtype,
-            0,
-            duration,
-            to,
-            self.config.bssid,
-        );
+        let mut mpdu = frame::header(frame::MANAGEMENT, subtype, 0, to, self.config.bssid);
         mpdu.extend(body);
         self.queue(at, to, Out::Mpdu(mpdu.into()), None);
     }
@@ -660,7 +665,6 @@ impl Network {
             frame::DATA,
             0,
             frame::FROM_DS | protected,
-            timing::duration_us(),
             sta,
             self.config.bssid,
         );
@@ -694,10 +698,12 @@ impl Network {
 
     /// Timestamp, Beacon Interval and Capability Information, then the elements a Beacon
     /// (9.3.3.2, Table 9-27) and a Probe Response (9.3.3.10) share up to the TIM: SSID,
-    /// Supported Rates and DSSS Parameter Set.
+    /// Supported Rates and DSSS Parameter Set. The rates are the access point's whole set: 1,
+    /// 2, 5.5 and 11 Mb/s basic, where its management and group frames go, and the ERP-OFDM
+    /// rates its Data frames may take.
     fn bss_head(&self, start: Time, out: &mut Vec<u8>) {
         // The Timestamp is the TSF, microseconds from 0, when its first bit is on the air
-        // (9.4.1.10): after the 192 us PLCP and the 24-octet header at 1 Mb/s.
+        // (9.4.1.10): after the 192 us PLCP and the 24-octet header at the basic 1 Mb/s.
         let tsf = start.as_ps() / timing::US + 192 + 24 * 8;
         out.extend(tsf.to_le_bytes());
         out.extend(timing::BEACON_INTERVAL_TU.to_le_bytes());
@@ -728,7 +734,6 @@ impl Network {
             frame::MANAGEMENT,
             frame::BEACON,
             0,
-            0,
             Mac::BROADCAST,
             self.config.bssid,
         );
@@ -751,7 +756,6 @@ impl Network {
             frame::MANAGEMENT,
             frame::PROBE_RESPONSE,
             0,
-            timing::duration_us(),
             to,
             self.config.bssid,
         );
@@ -766,6 +770,25 @@ impl Network {
         let sta = h.addr2;
         let bssid = self.config.bssid;
         let to_us = h.addr1 == bssid;
+        // The Power Management bit takes effect before the frame does, so a station that wakes
+        // gets the frames held for it ahead of an answer to this one, as the MSDUs of one TID
+        // go in order. A frame that starts or ends its membership is handled first, and its
+        // bit after, so frames held for an association it ends are not sent.
+        let power = (h.kind != frame::CONTROL && to_us).then_some(h.flags & frame::PWR_MGT != 0);
+        let membership = h.kind == frame::MANAGEMENT
+            && matches!(
+                h.subtype,
+                frame::AUTH
+                    | frame::ASSOC_REQUEST
+                    | frame::REASSOC_REQUEST
+                    | frame::DISASSOC
+                    | frame::DEAUTH
+            );
+        if let Some(dozing) = power
+            && !membership
+        {
+            self.power_save(at, sta, dozing);
+        }
         match (h.kind, h.subtype) {
             (frame::MANAGEMENT, frame::PROBE_REQUEST) => {
                 if h.addr3.is_some_and(|a| a == bssid || a == Mac::BROADCAST) {
@@ -824,8 +847,10 @@ impl Network {
             }
             _ => {}
         }
-        if h.kind != frame::CONTROL && to_us {
-            self.power_save(at, sta, h.flags & frame::PWR_MGT != 0);
+        if let Some(dozing) = power
+            && membership
+        {
+            self.power_save(at, sta, dozing);
         }
     }
 
@@ -864,6 +889,7 @@ impl Network {
                     dozing: false,
                     held: VecDeque::new(),
                     rsna: None,
+                    rate: BASIC,
                 });
             } else {
                 status = AP_FULL;
@@ -880,7 +906,8 @@ impl Network {
     /// An Association or Reassociation Request (9.3.3.5, 9.3.3.7) from an authenticated
     /// station (11.3.5.3). Its SSID must be the access point's, and under WPA2-PSK its RSNE
     /// must ask for CCMP-128 and PSK, and the 4-way handshake starts. The station keeps its
-    /// AID, or takes the lowest free one. A station that has not authenticated gets a
+    /// AID, or takes the lowest free one, and its Data frames go at the fastest rate both its
+    /// rate elements and the access point's name. A station that has not authenticated gets a
     /// Deauthentication, reason 6 (11.3.3).
     fn associate(&mut self, at: Time, sta: Mac, body: &[u8], reassoc: bool) {
         // Capability Information and Listen Interval, then the current AP's address in a
@@ -911,10 +938,12 @@ impl Network {
                 .aid
                 .unwrap_or_else(|| (1..).find(|aid| !used.contains(aid)).expect("a free AID"));
             station.aid = Some(aid);
+            station.rate = timing::data_rate(element::rates(elements));
             Some(aid)
         } else {
             station.aid = None;
             station.held.clear();
+            station.rate = BASIC;
             None
         };
         station.dozing = false;
@@ -1220,14 +1249,7 @@ impl Network {
         let (mpdu, more) = match station.held.pop_front() {
             Some(mpdu) => (mpdu, !station.held.is_empty()),
             None => {
-                let null = frame::header(
-                    frame::DATA,
-                    frame::NULL,
-                    frame::FROM_DS,
-                    timing::duration_us(),
-                    sta,
-                    bssid,
-                );
+                let null = frame::header(frame::DATA, frame::NULL, frame::FROM_DS, sta, bssid);
                 (null.into(), false)
             }
         };
