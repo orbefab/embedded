@@ -1,5 +1,6 @@
 mod adc;
 mod alu_flags;
+mod boot;
 mod clock_select;
 mod common;
 mod counted_runs;

@@ -1333,13 +1333,13 @@ expect @ldr.v < 0.050V
 }
 
 /// A Nano's A6 and A7 are the TQFP's ADC6 and ADC7. Dividers from 5V put 2/3 of it on A6 and
-/// 1/3 on A7, and the sketch prints both codes every 10 ms.
+/// 1/3 on A7, and the sketch prints both codes every 10 ms from 66 ms after power-on.
 #[test]
 fn a_nano_reads_the_voltage_on_a6_and_a7() {
     let dir = project(
         "\
 open
-step 50ms
+step 116ms
 expect serial contains \"A6=682 A7=341\"
 expect no diagnostics
 ",

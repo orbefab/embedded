@@ -402,6 +402,33 @@ fn reset_low_on_pc6_holds_the_chip_and_high_restarts_it() {
     assert_eq!(timeline.drives()[PB5 as usize], PinDrive::Low);
 }
 
+/// Table 9-4, `CKSEL0` 1 and `SUT` 11: 16K CK, then 14 CK and 65 ms at 16 MHz.
+const RESET_DELAY: u64 = 16_384 + 14 + 1_040_000;
+
+#[test]
+fn a_release_inside_the_run_that_found_the_hold_times_out_from_the_release() {
+    let mut timeline = Timeline::new(cpu(&toggle()));
+    while timeline.run_until(100).is_some() {}
+    timeline.set_pad(PC6, false);
+    // An engine step of 10 ms: the hold starts one cycle on, well inside it.
+    assert_eq!(timeline.run_until(160_100).map(|halt| halt.at), Some(101));
+    timeline.set_pad(PC6, true);
+    assert_eq!(
+        timeline.run_until(160_100).map(|halt| halt.at),
+        Some(102),
+        "the hold ends one cycle on"
+    );
+    let first = timeline.run_until(2_000_000).unwrap();
+    assert_eq!(timeline.drives()[PB5 as usize], PinDrive::Low);
+    // `SBI DDRB,5` drives PB5 two cycles after the time-out, which starts where the core sat
+    // at the release: the cycle the host reached, or the end of the instruction across it.
+    assert!(
+        (101 + RESET_DELAY + 2..=104 + RESET_DELAY + 2).contains(&first.at),
+        "PB5 at {}, the release at 101",
+        first.at
+    );
+}
+
 #[test]
 fn a_reset_keeps_the_pads_the_host_drives() {
     let mut timeline = Timeline::new(cpu(&echo()));

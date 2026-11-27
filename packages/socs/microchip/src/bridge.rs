@@ -6,7 +6,7 @@
 use orbe_mcu::{Fault, Frame, I2cPhase, Mcu, Note, Pc, Phase, Setting, Unsupported};
 use orbe_model::{Drive, Quantity, Readings, Stop, Time};
 
-use crate::{Channel, Cpu, FuseBytes, I2cNote, PinDrive, Port, Refused, Timeline};
+use crate::{Bootloader, Channel, Cpu, FuseBytes, I2cNote, PinDrive, Port, Refused, Timeline};
 
 /// What a pin of the kind is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -122,12 +122,14 @@ clone_fields!(Bridge {
 });
 
 impl Bridge {
-    /// The chip at power-on on a `clock_hz` crystal, with `fuses` programmed and `flash` from
-    /// address 0.
-    pub fn new(clock_hz: u32, fuses: FuseBytes, flash: &[u8]) -> Bridge {
+    /// The chip on a `clock_hz` crystal, with `fuses` programmed, `bootloader` in its boot section
+    /// and `flash` from address 0, at its first instruction at 0 ps. [`Bridge::power_on`] starts
+    /// it at power-on instead.
+    pub fn new(clock_hz: u32, fuses: FuseBytes, bootloader: Bootloader, flash: &[u8]) -> Bridge {
         let mut cpu = Cpu::new();
         cpu.set_clock_hz(clock_hz);
         cpu.set_fuses(fuses.low, fuses.high, fuses.extended);
+        cpu.set_bootloader(bootloader);
         cpu.load_flash(flash);
         let mut bridge = Bridge {
             timeline: Timeline::new(cpu),
@@ -139,6 +141,14 @@ impl Bridge {
         };
         bridge.refresh();
         bridge
+    }
+
+    /// Supply rises at 0 ps: the first instruction runs after the start from reset the fuses
+    /// select and the bootloader's way to the sketch, as [`Cpu::power_on`] says. Called before
+    /// the first run.
+    pub fn power_on(&mut self) {
+        self.timeline.power_on();
+        self.refresh();
     }
 
     pub fn cpu(&self) -> &Cpu {
@@ -302,6 +312,9 @@ impl Mcu for Bridge {
             } => setting(peripheral, Setting::Register(name)),
             Refused::Interrupt { peripheral } => setting(peripheral, Setting::Interrupt),
             Refused::Sleep => setting("CPU", Setting::Sleep),
+            Refused::Unsimulated { peripheral, what } => {
+                setting(peripheral, Setting::Unsimulated(what))
+            }
         };
         Some((at, fault))
     }

@@ -25,6 +25,12 @@ pub enum Refused {
     Interrupt { peripheral: &'static str },
     /// `SLEEP` with `SE` set in a reserved sleep mode.
     Sleep,
+    /// The chip reached `what` of `peripheral`, which the model does not simulate at all, such
+    /// as the bootloader's wait for an upload.
+    Unsimulated {
+        peripheral: &'static str,
+        what: &'static str,
+    },
 }
 
 /// The first thing the chip refused, which stopped it.

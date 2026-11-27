@@ -341,13 +341,13 @@ fn pause_lists_what_play_ran_and_step_lists_only_its_own() {
     let mut live = opened();
     assert!(live.run(&Command::Play).ok());
     assert!(live.run(&command("press @btn1")).ok());
-    for _ in 0..4 {
+    for _ in 0..5 {
         assert!(live.tick(TICK).is_some());
     }
     let paused = live.run(&Command::Pause);
     assert!(paused.ok(), "{}", paused.text());
     let text = paused.text();
-    assert!(text.starts_with("t=64ms (from 0s)\n"), "{text}");
+    assert!(text.starts_with("t=80ms (from 0s)\n"), "{text}");
     assert!(text.contains(" nano.D13 high"), "{text}");
     assert!(text.contains(" led1 lit"), "{text}");
     assert_eq!(paused.json()["data"]["playing"], false);
@@ -356,7 +356,7 @@ fn pause_lists_what_play_ran_and_step_lists_only_its_own() {
     assert!(stepped.ok(), "{}", stepped.text());
     let stepped_text = stepped.text();
     assert!(
-        stepped_text.starts_with("t=65ms (from 64ms)\n"),
+        stepped_text.starts_with("t=81ms (from 80ms)\n"),
         "{stepped_text}"
     );
     let own: Vec<_> = stepped_text
@@ -378,16 +378,17 @@ fn pause_lists_what_play_ran_and_step_lists_only_its_own() {
         "each change is listed once: {again_text}"
     );
     assert!(
-        again_text.starts_with("t=66ms (from 65ms)\n"),
+        again_text.starts_with("t=82ms (from 81ms)\n"),
         "{again_text}"
     );
 }
 
 /// Press during `play`, let the LED light, then release so the next `step` has a change of its own.
+/// Five ticks of 16 ms outlast the Nano's 66 ms start from power-on.
 fn play_until_lit(live: &mut Live) {
     assert!(live.run(&Command::Play).ok());
     assert!(live.run(&command("press @btn1")).ok());
-    for _ in 0..4 {
+    for _ in 0..5 {
         assert!(live.tick(TICK).is_some());
     }
     assert!(live.run(&command("release @btn1")).ok());
@@ -405,7 +406,7 @@ fn change_lines(text: &str) -> Vec<&str> {
 
 fn assert_play_then_step(reply: &Reply) {
     let text = reply.text();
-    assert!(text.starts_with("t=74ms (from 0s)\n"), "{text}");
+    assert!(text.starts_with("t=90ms (from 0s)\n"), "{text}");
     let lines = change_lines(&text);
     let at = |needle: &str| {
         lines
@@ -462,11 +463,11 @@ fn a_viewer_pause_leaves_plays_changes_for_the_next_step() {
     assert_eq!(played.json()["data"], json!({ "playing": true }));
     let (pressed, _) = viewer::answer(&mut live, r#"{"id": 2, "cmd": "press", "ref": "@btn1"}"#);
     assert!(pressed.ok(), "{}", pressed.text());
-    for _ in 0..4 {
+    for _ in 0..5 {
         assert!(live.tick(TICK).is_some());
     }
     let (paused, _) = viewer::answer(&mut live, r#"{"id": 3, "cmd": "pause"}"#);
-    assert_eq!(paused.text(), "paused at t=64ms");
+    assert_eq!(paused.text(), "paused at t=80ms");
     assert_eq!(paused.json()["data"], json!({ "playing": false }));
     assert!(live.run(&command("release @btn1")).ok());
     let stepped = live.run(&command("step 10ms"));
@@ -487,7 +488,7 @@ fn pause_with_nothing_held_says_playing_is_false() {
 #[test]
 fn a_step_refused_at_the_stop_lists_what_play_ran() {
     let mut live = Live::new("t", Files::disk());
-    live.stop_at(Some((Duration::from_ms(40), "ORBE_TEST_STOP".into())));
+    live.stop_at(Some((Duration::from_ms(80), "ORBE_TEST_STOP".into())));
     assert!(live.run(&command("open")).ok());
     assert!(live.run(&Command::Play).ok());
     assert!(live.run(&command("press @btn1")).ok());
@@ -495,12 +496,12 @@ fn a_step_refused_at_the_stop_lists_what_play_ran() {
     let ended = live.run(&command("step 1ms"));
     assert_eq!(ended.error.as_ref().unwrap().code, Code::Ended);
     let text = ended.text();
-    assert!(text.starts_with("t=40ms (from 0s)\n"), "{text}");
+    assert!(text.starts_with("t=80ms (from 0s)\n"), "{text}");
     assert!(text.contains(" led1 lit"), "{text}");
     let again = live.run(&command("step 1ms"));
     assert_eq!(
         again.text(),
-        "error[ended]: the session reached its 40ms stop\n  hint: run `open` to start again"
+        "error[ended]: the session reached its 80ms stop\n  hint: run `open` to start again"
     );
 }
 
@@ -724,7 +725,7 @@ fn a_comparator_s_serial_reaches_each_frame_once_and_in_order() {
     frames.extend(feed.after(&live, &opened));
 
     for line in [
-        "step 50ms",
+        "step 116ms",
         "set light 10",
         "step --until @led1 lit --timeout 100ms",
         "step 50ms",
@@ -774,7 +775,7 @@ fn a_comparator_s_serial_reaches_each_frame_once_and_in_order() {
         "{opening}"
     );
 
-    let stepped = live.run_with(&parse_at("step 50ms", &root), &mut |progress| {
+    let stepped = live.run_with(&parse_at("step 116ms", &root), &mut |progress| {
         fresh_frames.extend(feed.burst(progress.sample(), progress.serial(), None));
         ControlFlow::Continue(())
     });

@@ -26,8 +26,9 @@ const VT: f64 = 1.380649e-23 * 298.15 / 1.602176634e-19;
 const GMIN: f64 = 1e-12;
 /// Larger measured gap at `grid_ps` of 1e9 is 69612 ps. This is that gap plus 130 ns.
 const RELEASE_WINDOW_PS: u64 = 200_000;
-/// External-reset extra cycles, from the crystal row of the fuse tables.
-const RESET_CYCLES: u64 = 14;
+/// External-reset cycles besides the 65 ms, from the crystal row of the fuse tables: the 16K CK
+/// start-up and the 14 CK of the additional delay (Table 9-4).
+const RESET_CYCLES: u64 = 16_384 + 14;
 /// Recorded from the engine. First PB5 rise of `packages/engine/tests/firmware/sketch/blink.hex`, in cycles. Not derived.
 const SKETCH_CYCLES: u64 = 233;
 /// Recorded from the engine at these switch times. Cycles from this example's switch close to the PB5 rise. Not derived.
@@ -851,6 +852,73 @@ fn v3v3_stays_between_the_setpoints_the_run_visits() {
             (low - settled) <= v3 && v3 <= (high_set + settled),
             "row {index} at {} ps v3 {v3} outside {low} to {high_set}",
             time.as_ps()
+        );
+    }
+}
+
+/// The fragment's chip as Arduino's `boards.txt` burns a Uno's: high fuse `0xDE` and Optiboot,
+/// powered up at 0 ps.
+fn powered_with_optiboot() -> serde_json::Value {
+    let mut netlist = fragment();
+    let mcu = part_mut(&mut netlist, "mcu");
+    mcu["fuses"]["high"] = serde_json::json!(0xDE);
+    mcu["bootloader"] = serde_json::json!("optiboot");
+    mcu["start"] = serde_json::json!("power_on");
+    netlist
+}
+
+/// The power-on start from reset, 16K CK, 14 CK and 65 ms (Table 9-4), then Optiboot's 26
+/// cycles to the sketch, move the sketch's first PB5 rise by that much.
+#[test]
+fn a_powered_sketch_starts_after_the_start_from_reset_and_optiboot() {
+    let mut netlist = powered_with_optiboot();
+    netlist["analysis"]["transient"]["stop_ps"] = serde_json::Value::from(200_000_000_000_u64);
+    netlist["analysis"]["transient"]["grid_ps"] = serde_json::Value::from(1_000_000_000_u64);
+    let cycle = cycle_ps(&netlist);
+    let done = run(&netlist);
+    assert_quiet(&done);
+    let pb5 = logic(&done.folder, "#mcu.logic.PB5");
+    let start = 65_000_000_000 + (RESET_CYCLES + 26 + SKETCH_CYCLES) * cycle;
+    assert_eq!(pb5.first().copied(), Some((start, true)));
+}
+
+/// A press of the reset button sets `EXTRF`, and Optiboot waits for an upload. With nothing on
+/// RXD it toggles PB5 six times, 976 counts of `clkI/O` / 1024 apart, and its 1 s watchdog then
+/// resets the chip, 128K watchdog cycles after the last `WDR`. That reset goes straight to the
+/// sketch. The cycles are `optiboot_atmega328.hex`'s on the chip model.
+#[test]
+fn the_reset_button_under_optiboot_flashes_pb5_then_its_watchdog_starts_the_sketch() {
+    let mut netlist = powered_with_optiboot();
+    part_mut(&mut netlist, "sw_reset")["events"] = serde_json::json!([
+        { "t_ps": 500_000_000_000_u64, "state": "closed" },
+        { "t_ps": 600_000_000_000_u64, "state": "open" }
+    ]);
+    netlist["analysis"]["transient"]["stop_ps"] = serde_json::Value::from(2_300_000_000_000_u64);
+    netlist["analysis"]["transient"]["grid_ps"] = serde_json::Value::from(1_000_000_000_u64);
+    let cycle = cycle_ps(&netlist);
+    let done = run(&netlist);
+    assert_quiet(&done);
+    let release = logic(&done.folder, "#mcu.logic.PC6")
+        .into_iter()
+        .find(|(at, high)| *high && *at >= 600_000_000_000)
+        .unwrap()
+        .0;
+    let start = 65_000_000_000 + RESET_CYCLES * cycle;
+    let flash = |k: u64| release + start + (999_428 + 999_424 * k) * cycle;
+    let watchdog = flash(5) + 16_384_001 * cycle;
+    let mut want: Vec<(u64, bool)> = (0..6).map(|k| (flash(k), k % 2 == 0)).collect();
+    want.push((watchdog + start + (26 + SKETCH_CYCLES) * cycle, true));
+    let got: Vec<(u64, bool)> = logic(&done.folder, "#mcu.logic.PB5")
+        .into_iter()
+        .filter(|(at, _)| *at > release)
+        .take(want.len())
+        .collect();
+    assert_eq!(got.len(), want.len(), "{got:?}");
+    for ((at, high), (want_at, want_high)) in got.iter().zip(&want) {
+        assert_eq!(high, want_high, "{got:?}");
+        assert!(
+            at.abs_diff(*want_at) <= cycle,
+            "PB5 at {at} ps, want {want_at} ps, one cycle is {cycle} ps"
         );
     }
 }

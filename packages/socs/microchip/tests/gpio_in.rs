@@ -920,7 +920,7 @@ fn a_pin_that_moves_while_reset_is_held_sets_no_flag_at_release() {
             cpu.drive_pin(PD2, if n % 2 == 0 { Level::High } else { Level::Low });
         }
         cpu.release_reset();
-        let start = cpu.cycles() + 14 + 1_040_000;
+        let start = cpu.cycles() + 16_384 + 14 + 1_040_000;
         cpu.run_until(start + 20);
         assert_ne!(cpu.pc(), 0, "the core runs");
         assert_eq!(cpu.peek(EIFR), 0, "release sets no INTF, armed {armed}");
@@ -1004,7 +1004,8 @@ fn a_high_held_across_reset_falls_to_pcif0() {
 fn a_rise_on_the_last_cycle_of_the_time_out_reaches_a_first_sts_to_eicra() {
     let mut cpu = Cpu::new();
     let fuses = cpu.fuses();
-    // Internal RC, `CKDIV8` unprogrammed, `SUT = 00`. The time-out is 14 CK (Table 9-12).
+    // Internal RC, `CKDIV8` unprogrammed, `SUT = 00`. The start from reset is the 6 CK
+    // start-up and 14 CK more (Table 9-12).
     cpu.set_fuses(0xC2, fuses.high, fuses.extended);
     let mut program = sts(16, EICRA).to_vec();
     program.extend(nops(4));
@@ -1013,7 +1014,7 @@ fn a_rise_on_the_last_cycle_of_the_time_out_reaches_a_first_sts_to_eicra() {
     cpu.pull_reset();
     cpu.run_until(cpu.cycles() + 10);
     cpu.release_reset();
-    let start = cpu.cycles() + 14;
+    let start = cpu.cycles() + 6 + 14;
     cpu.set_reg(16, 0x03);
     cpu.run_until(start - 1);
     cpu.drive_pin(PD2, Level::High);

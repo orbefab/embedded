@@ -1,7 +1,8 @@
 # The Nano reads VRX on A0, VRY on A1 and SW on D2 (INPUT_PULLUP), prints x, y and btn over
 # Serial and lights LED L while the thumbstick is pressed.
 open
-step 60ms
+# The sketch starts 66 ms after power-on, when the start from reset the fuses set is over.
+step 126ms
 expect serial contains "x=511 y=511 btn=0"
 expect @nano.led_l off
 set @joy.x.position 0.9

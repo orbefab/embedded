@@ -84,8 +84,9 @@ test.describe("knob", () => {
     await shot(page, "knob-opened");
   });
 
-  test("`orbe step 50ms` runs past the sketch's first reading, and the LED stays off", async () => {
-    const stepped = orbe("step", "50ms");
+  // The Nano starts the sketch 66 ms after power-on, so 116 ms is 50 ms into it.
+  test("`orbe step 116ms` runs past the sketch's first reading, and the LED stays off", async () => {
+    const stepped = orbe("step", "116ms");
     await waitGlow(page, false);
     expect({ ok: stepped.ok, position: value(orbe("get", "@pot1.position")) }).toEqual({ ok: true, position: 0.2 });
   });

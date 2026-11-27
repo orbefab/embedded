@@ -145,6 +145,8 @@ fn format_7_keys_before_format_7_are_told_to_set_format_7() {
         ("led-0603", "led", &["ratings.reverse_voltage"][..]),
         ("joystick-ky023-pot", "potentiometer", &["ratings"][..]),
         ("keypad-4x4-key", "switch", &["ratings"][..]),
+        ("atmega328p-tqfp32", "atmega328p", &["start"][..]),
+        ("atmega328p-dip28", "atmega328p", &["start"][..]),
     ] {
         let found = findings(&in_format(id, 7, 6));
         let mut found: Vec<(Code, String, String)> = found
@@ -198,6 +200,8 @@ fn the_catalog_parts_in_format_5_and_6_have_no_findings() {
         "led-5mm-yellow",
         "joystick-ky023-pot",
         "keypad-4x4-key",
+        "atmega328p-tqfp32",
+        "atmega328p-dip28",
     ] {
         let text =
             fs::read_to_string(common::repo().join(format!("parts/{id}/part.jsonc"))).unwrap();

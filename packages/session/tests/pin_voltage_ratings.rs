@@ -109,7 +109,7 @@ fn a_nano_driving_an_esp32s3_gpio_at_5v_warns_and_the_s3_still_reads_high() {
     let project = Path::new("proj");
     let mut live = Live::new("s3-5v", files);
     run_cmd(&mut live, project, "open");
-    run_cmd(&mut live, project, "step 5ms");
+    run_cmd(&mut live, project, "step 71ms");
     let (diagnostics, snap_text) = diagnostics_of(&mut live, project);
     let voltage: Vec<&Value> = diagnostics
         .iter()
@@ -277,7 +277,7 @@ fn an_oled_on_a_5v_i2c_bus_warns_and_keeps_drawing() {
     let project = Path::new("proj");
     let mut live = Live::new("oled-5v-bus", files);
     run_cmd(&mut live, project, "open");
-    run_cmd(&mut live, project, "step 140ms");
+    run_cmd(&mut live, project, "step 206ms");
     let (diagnostics, snap_text) = diagnostics_of(&mut live, project);
     let mut pins: Vec<String> = diagnostics
         .iter()

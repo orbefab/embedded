@@ -138,7 +138,7 @@ fn the_uno_d13_with_its_pull_up_reads_low() {
     write_file(
         dir,
         "tests/pullup.test",
-        "open\nstep 10ms\nexpect @uno.D13 low\nexpect @uno.D13 > 1.4V\nexpect @uno.D13 < 1.5V\n",
+        "open\nstep 76ms\nexpect @uno.D13 low\nexpect @uno.D13 > 1.4V\nexpect @uno.D13 < 1.5V\n",
     );
     let run = Runtime::new().orbe(dir, &["test"]).ok();
     assert!(

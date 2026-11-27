@@ -1,7 +1,8 @@
 # strip.rainbow(firstHue) cycles a rainbow along the stick, shifting one pixel (hue +8192)
 # every 800 ms.
 open
-step 20ms
+# The sketch starts 66 ms after power-on, when the start from reset the fuses set is over.
+step 86ms
 expect @stick.px1 rgb(255,0,0)
 expect @stick.px2 rgb(255,120,0)
 expect @stick.px3 rgb(42,255,0)

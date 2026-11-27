@@ -123,8 +123,8 @@ fn settled(hex: &str, extra: usize, rgb: &str, step: &str) -> (f64, Vec<String>)
 
 #[test]
 fn eight_white_pixels_stay_under_the_usb_rating_and_sixteen_go_over() {
-    let (white, white_over) = settled("ws2812-white", 0, "rgb(255,255,255)", "step 20ms");
-    let (dim, dim_over) = settled("ws2812-dim", 0, "rgb(0,8,0)", "step 20ms");
+    let (white, white_over) = settled("ws2812-white", 0, "rgb(255,255,255)", "step 86ms");
+    let (dim, dim_over) = settled("ws2812-dim", 0, "rgb(0,8,0)", "step 86ms");
     assert!(
         white_over.is_empty(),
         "eight full white pixels draw {white} A and warn {white_over:?}"
@@ -142,7 +142,7 @@ fn eight_white_pixels_stay_under_the_usb_rating_and_sixteen_go_over() {
     // The USB supply's 0.5 A is a peak. The Schottky's 0.5 A is a mean with a 55 ms time
     // constant, which about 0.62 A crosses `55 ms * ln(0.62 / 0.12)`, about 90 ms, after it
     // starts.
-    let (full, over) = settled("ws2812-white", 8, "rgb(255,255,255)", "step 120ms");
+    let (full, over) = settled("ws2812-white", 8, "rgb(255,255,255)", "step 186ms");
     assert!(full > 0.5, "sixteen pixels draw {full} A");
     for part in [
         "#nano__usb__host.i (nano.usb)",

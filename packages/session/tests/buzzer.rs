@@ -513,7 +513,7 @@ fn the_first_note_from_silence_reads_its_own_pitch() {
         r#"["nano.5V", "rs.a"], ["rs.b", "bz.+"], ["bz.-", "q1.collector"],
            ["q1.emitter", "nano.GND"], ["nano.D8", "rb.a"], ["rb.b", "q1.base"]"#,
     );
-    let got = sweep(&mut live, "step 1ms", 60);
+    let got = sweep(&mut live, "step 1ms", 126);
     assert_eq!(only_notes(&got, &[440.1]), [440.1], "{got:?}");
 }
 

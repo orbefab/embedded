@@ -29,11 +29,12 @@ export interface Moment {
 export const MOMENT: Moment = { atMs: 1000, press: null };
 /** A Block whose picture shows another moment, with why. Each is still the Block as it runs. */
 export const MOMENT_OF: Readonly<Record<string, Partial<Moment>>> = {
-  // LiquidCrystal_I2C's init keeps the glass dark until about 1.08 s, and both lines are written
-  // by 1.12 s.
+  // LiquidCrystal_I2C's init keeps the glass dark until about 1.15 s, and both lines are written
+  // by 1.19 s.
   "nano-lcd1602-i2c": { atMs: 1200 },
-  // MD_Parola scrolls "ORBE" to the centre of the 32 x 8 display at 600 ms.
-  "nano-max7219-scroll": { atMs: 600 },
+  // MD_Parola scrolls "ORBE" to the centre of the 32 x 8 display at 666 ms, 600 ms after the
+  // sketch starts.
+  "nano-max7219-scroll": { atMs: 666 },
   // The LED lights only while the button is down.
   "nano-button-led": { press: "@btn1" },
   "uno-button-led": { press: "@btn1" },

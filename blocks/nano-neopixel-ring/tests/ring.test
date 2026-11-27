@@ -1,7 +1,8 @@
 # ring.rainbow(firstHue) cycles a rainbow around the 16-pixel ring, shifting one pixel
 # (hue +4096) every 300 ms.
 open
-step 20ms
+# The sketch starts 66 ms after power-on, when the start from reset the fuses set is over.
+step 86ms
 expect @ring.px1 rgb(255,0,0)
 expect @ring.px5 rgb(42,255,0)
 expect @ring.px9 rgb(0,255,255)

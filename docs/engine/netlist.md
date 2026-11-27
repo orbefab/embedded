@@ -883,6 +883,8 @@ This document runs `packages/engine/tests/firmware/toggle.S` at 16 MHz into 1 ko
 | `firmware` | Intel HEX text | records 00 to 05, an end record, every byte inside the 32 KB flash |
 | `clock_hz` | `Hz`, a JSON integer | greater than 0 and at most 4294967295, else rule `positive` or `netlist.syntax` |
 | `fuses.low`, `fuses.high`, `fuses.extended` | a JSON integer from 0 to 255 | the clock and mode rules below, else rule `unsupported` |
+| `bootloader` | `"optiboot"` | optional, else `netlist.syntax` |
+| `start` | `"first_instruction"` or `"power_on"` | optional, `"first_instruction"` when left out, else `netlist.syntax` |
 | `output.high_drop`, `output.low_drop` | `V` | at least 0, else rule `non_negative` |
 | `output.high_resistance`, `output.low_resistance` | `ohm` | the resistor's |
 | `pull_up_resistance`, `reset_pull_up_resistance` | `ohm` | the resistor's |
@@ -901,10 +903,14 @@ A break is `netlist.value` with the dotted field, such as `input_threshold.high`
 - on `fuses.low`, any other `CKSEL`, because the model's only clock is the crystal at `clock_hz`. The factory low fuse, `0x62`, selects the internal RC oscillator and is `unsupported`.
 - on `fuses.low`, a programmed `CKOUT`, because the model drives no clock on `PB0`.
 - on `fuses.high`, a programmed `DWEN`, because the model has no debugWIRE on `RESET`.
-- on `fuses.high`, a programmed `BOOTRST`, because the core always starts at word 0, and a real part would start in the boot section (Table 12-7).
+- on `fuses.high`, a programmed `BOOTRST` with no `bootloader`, because the image runs from word 0, and a real part would start in the boot section (Table 12-7).
 - on `fuses.extended`, a reserved `BODLEVEL`, 000 to 011 in Table 29-12, which names no level.
 
-`CKSEL0` with `SUT`, `CKDIV8`, `RSTDISBL`, `WDTON`, and `BODLEVEL` act as [avr.md](avr.md#fuses) says. The model reads nothing of `SPIEN`, `EESAVE`, or `BOOTSZ`.
+`CKSEL0` with `SUT`, `CKDIV8`, `RSTDISBL`, `WDTON`, and `BODLEVEL` act as [avr.md](avr.md#fuses) says. `BOOTSZ` places the boot section's first word, where a programmed `BOOTRST` starts the chip (Table 27-13). The model reads nothing of `SPIEN` or `EESAVE`.
+
+`bootloader` names what the boot section holds. `"optiboot"` is Arduino's Optiboot for the ATmega328P at 16 MHz, which [avr.md](avr.md#power-on) describes. With `BOOTRST` programmed, a reset runs its way to the sketch. After a reset from `RESET` it first waits for an upload, flashing `PB5`, until its watchdog resets the chip, and a byte on `RXD` in that wait ends the run with [`chip.unsupported_setting`](diagnostics.md#chipunsupported_setting), peripheral `Optiboot`. With `BOOTRST` unprogrammed it never runs. `firmware` is still the sketch alone, from word 0.
+
+`start` is where the run begins. `"first_instruction"` puts the first instruction at 0 ps, with the start from reset already over, so a netlist written before the field keeps its meaning. `"power_on"` starts the chip as the supply comes up at 0 ps: it holds in reset for the delay its fuses set, sets `PORF`, and fetches from the reset vector after it. The catalog's ATmega328P parts name `"power_on"`.
 
 The model is the core and its adapter in [avr.md](avr.md#behind-the-seam). Each port pin drives high through `output.high_resistance` from `VCC`, drives low through `output.low_resistance` into `GND_8`, pulls up through `pull_up_resistance` to `VCC`, or is off, as the firmware sets it. In each of those states it also leaks through `leakage_resistance` to `VCC` and through another to `GND_8`. It reads high above `input_threshold.high` times `V(VCC) - V(GND_8)` over `GND_8`, and low at or below `input_threshold.low` times it. `PC6` is `RESET` while `RSTDISBL` is unprogrammed. It then pulls up through `reset_pull_up_resistance`, leaks as an I/O pin does, and reads through `reset_threshold`, and a low level holds the chip in reset. The ADC samples `PC0` to `PC5`, `ADC6` and `ADC7` when the part wires them, `AVCC` and `AREF` against `GND_22`. With `active_current`, a conductance of `active_current / 5 V` joins `VCC` to `GND_8` while the core runs, so it draws `active_current` at a 5 V supply and scales with it, as the op-amp's `supply_current` does. With `reset_current`, the conductance is `reset_current / 5 V` instead while a reset, from `RESET` low or a brown-out, holds the chip. The catalog's ATmega328P takes 2.0 mA there, DS40002061B Figure 31-377 on the 5.0 V curve at 16 MHz, against its 11.4 mA running. Without `reset_current` the chip draws `active_current` in reset too, and without either the core draws nothing, so a netlist written before the fields keeps its meaning. The conductance joins no new DC path, since every port pin's leakage already joins `VCC` to `GND_8`.
 

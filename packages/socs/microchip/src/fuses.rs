@@ -66,7 +66,8 @@ pub struct Fuses {
 /// the arithmetic stays integral. 4.1 ms is 4100 µs. 65 ms is 65000 µs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Startup {
-    /// Start-up from power-down and power-save, in CK.
+    /// The oscillator's start-up time, in CK: the whole wake from power-down and power-save,
+    /// and the first part of the start from reset.
     pub power_down_ck: u64,
     /// The CK part of the additional delay from reset.
     pub reset_ck: u64,
@@ -159,7 +160,10 @@ pub fn clkps_reserved(clkps: u8) -> bool {
 /// Which delay a wake or a reset uses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DelayKind {
-    /// Additional delay from reset (Table 9-4 and the matching tables).
+    /// The start from reset: the start-up time and the additional delay from reset of
+    /// Table 9-4 and the matching tables. §9.2.1: "The start-up sequence for the clock
+    /// includes both the time-out delay and the start-up time when the device starts up from
+    /// reset."
     Reset,
     /// Power-down and power-save column.
     PowerDown,
@@ -177,7 +181,9 @@ impl Startup {
             DelayKind::PowerDown => self.power_down_ck,
             DelayKind::Reset => {
                 let timed = u64::from(cpu_hz).saturating_mul(self.reset_us) / 1_000_000;
-                self.reset_ck.saturating_add(timed)
+                self.power_down_ck
+                    .saturating_add(self.reset_ck)
+                    .saturating_add(timed)
             }
         }
     }
@@ -248,11 +254,11 @@ mod tests {
         assert_eq!(bod_window(0b101), Some((2675, 2725)));
         assert_eq!(f.initial_clkps(), 0);
         assert_eq!(f.clock_div(), 1);
-        // Table 9-4, CKSEL0 = 1, SUT = 11: 16K CK, and 14 CK + 65 ms.
+        // Table 9-4, CKSEL0 = 1, SUT = 11: 16K CK, and 14 CK + 65 ms more from reset.
         assert_eq!(f.startup.power_down_ck, 16_384);
         assert_eq!(
             f.startup.cycles(DelayKind::Reset, 16_000_000),
-            14 + 1_040_000
+            16_384 + 14 + 1_040_000
         );
         assert_eq!(f.startup.cycles(DelayKind::Standby, 16_000_000), 6);
         assert_eq!(f.startup.cycles(DelayKind::None, 16_000_000), 0);
@@ -268,20 +274,20 @@ mod tests {
         assert_eq!(f.startup.reset_us, 65_000);
         assert_eq!(
             f.startup.cycles(DelayKind::Reset, 16_000_000),
-            14 + 1_040_000
+            6 + 14 + 1_040_000
         );
     }
 
     #[test]
     fn external_clock_decodes_to_the_table_9_16_reset_row() {
-        // Low `0xE0` is `CKSEL` 0000 and `SUT` 10.
+        // Low `0xE0` is `CKSEL` 0000 and `SUT` 10: 6 CK, and 14 CK + 65 ms more from reset.
         let f = Fuses::decode(FuseBytes {
             low: 0xE0,
             ..FuseBytes::BARE
         });
         assert_eq!(
             f.startup.cycles(DelayKind::Reset, 16_000_000),
-            14 + 1_040_000
+            6 + 14 + 1_040_000
         );
     }
 }

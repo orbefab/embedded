@@ -102,15 +102,15 @@ fn each_pad_is_the_pin_its_name_says() {
 }
 
 /// `RESET` holds the chip from power-on, then rises to about 2.45 V at 1 us: above its own
-/// 2.2 V, under an I/O pin's 2.6 V. With `SUT` 01 the reset delay is 14 cycles, and `toggle.S`
-/// then pulls PB5 low against 10 kohm to VCC.
+/// 2.2 V, under an I/O pin's 2.6 V. With `SUT` 01 the start from reset is 16K CK and 14 CK,
+/// 1.02 ms (Table 9-4), and `toggle.S` then pulls PB5 low against 10 kohm to VCC.
 #[test]
 fn reset_releases_at_its_own_threshold() {
     let step = r#"{ "name": "vr", "kind": "voltage_source", "pins": { "p": "src", "n": "gnd" },
           "voltage": { "kind": "step", "initial": { "value": 0.0, "unit": "V" },
                        "final": { "value": 2.4, "unit": "V" }, "at_ps": 1000000 } }"#;
     let netlist = board(
-        3 * US,
+        1_100 * US,
         &["src"],
         &[
             step.to_string(),

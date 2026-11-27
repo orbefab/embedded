@@ -554,6 +554,7 @@ An `atmega328p` ends the run on these, each a firmware store unless it says othe
 - `AS2` and `EXCLK`, with `peripheral` `TC2`: the store set that bit of `ASSR`.
 - `synchronous`, `UMSEL` and `UPM`, with `peripheral` `USART0`: the store wrote `UMSEL0` 01 or 10, or `UPM0` 01, to `UCSR0C`.
 - `sleep`, with `peripheral` `CPU`: a `SLEEP` with `SE` set in `SM` 100 or 101. The message reads `put the chip to sleep in a reserved sleep mode`, and `pc` is the `SLEEP`'s.
+- `unsimulated`, with `peripheral` `Optiboot`: a byte reached USART0 while Optiboot waited for an upload after a reset from `RESET`, on a part that names `"bootloader": "optiboot"` with `BOOTRST` programmed. It is no store. Optiboot would answer the STK500 protocol, which the model does not run. The message reads `{part} used Optiboot, the upload a byte on RXD starts after a reset from the RESET pin, at 0x00007fa6, which the model does not simulate, at {t_ps} ps`. `pc` is `getch`, and `t_ps` is the poll that found `RXC0` set.
 
 ## chip.halted
 

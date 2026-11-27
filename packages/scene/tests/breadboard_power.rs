@@ -19,8 +19,9 @@ use orbe_engine::diagnostic::{Diagnostic, Severity};
 use orbe_engine::run_folder::Results;
 use orbe_scene::Files;
 
-/// Long enough for the capacitances to settle, and for `gate_hold.hex` to finish setup.
-const STOP_PS: u64 = 50_000_000_000;
+/// Long enough for the capacitances to settle, and for `gate_hold.hex` to finish setup. The
+/// Nano's sketch starts 66 ms after power-on.
+const STOP_PS: u64 = 116_000_000_000;
 
 /// From `parts/lm7805-to220/part.jsonc`.
 const VOUT: f64 = 5.0;

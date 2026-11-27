@@ -782,7 +782,8 @@ fn snapshot_joins_the_last_serial_lines_with_a_newline_and_a_println_in_loop_rep
     fs::copy(flood, dir.join("build/button.ino.hex")).unwrap();
     let runtime = Runtime::new();
     runtime.orbe(dir, &["open"]).ok();
-    runtime.orbe(dir, &["step", "50ms"]).ok();
+    // The sketch starts 66 ms after power-on.
+    runtime.orbe(dir, &["step", "116ms"]).ok();
     let snapshot = runtime.orbe(dir, &["snapshot", "--json"]).ok().json();
     let serial = snapshot["data"]["serial"].as_str().unwrap();
     assert_eq!(serial.split('\n').count(), 10, "{serial:?}");
@@ -905,7 +906,8 @@ fn a_button_with_no_pull_down_warns_that_its_input_floats() {
     let runtime = Runtime::new();
     let orbe = |args: &[&str]| runtime.orbe(dir, args);
     orbe(&["open"]).ok();
-    let step = orbe(&["step", "20ms"]).ok();
+    // The sketch reads `D2` 66 ms after power-on.
+    let step = orbe(&["step", "86ms"]).ok();
     orbe(&["close"]).ok();
     let said =
         "warning[chip.floating_input] #nano__mcu.pin.PD2 (nano.D2) floats on #net.nano__D2 at ";
@@ -919,7 +921,7 @@ fn a_button_with_no_pull_down_warns_that_its_input_floats() {
 
     fs::write(dir.join("scene.jsonc"), &scene).unwrap();
     orbe(&["open"]).ok();
-    let step = orbe(&["step", "20ms"]).ok();
+    let step = orbe(&["step", "86ms"]).ok();
     orbe(&["close"]).ok();
     assert!(
         !step.stdout.contains("chip.floating_input"),

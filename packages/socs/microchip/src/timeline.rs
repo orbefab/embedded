@@ -106,6 +106,11 @@ impl Timeline {
                     if at <= self.done() {
                         return Some(self.halt(at));
                     }
+                    // The core runs no further than the halt it owes. A held core would
+                    // otherwise coast to `limit`, and a release at the halt would start the
+                    // time-out from there.
+                    self.advance(at);
+                    continue;
                 }
                 _ if self.cpu.is_stopped()
                     || self.refusal.is_some()
@@ -119,6 +124,13 @@ impl Timeline {
             }
             self.advance(limit);
         }
+    }
+
+    /// See [`Cpu::power_on`]. Called before the first run.
+    pub fn power_on(&mut self) {
+        assert_eq!(self.reached, 0, "power-on is the start of a run");
+        self.cpu.power_on();
+        self.collect(1);
     }
 
     /// Each pin's drive, by pin id, at the cycle it reached.

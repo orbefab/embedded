@@ -1,7 +1,8 @@
 # RGB LED colour mixing: cycles red, orange (PWM mix), green, cyan, blue, magenta (PWM mix)
 # holding each for 400 ms.
 open
-step 50ms
+# The sketch starts 66 ms after power-on, when the start from reset the fuses set is over.
+step 116ms
 expect @rgb.red lit
 expect @rgb.green off
 expect @rgb.blue off

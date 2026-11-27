@@ -74,7 +74,8 @@ Load `orbe skills get boards` for `nano-board` and `uno-board` pinouts, on-board
 
 ## The chip
 
-- `millis()`, `delay()` and the timers use simulated time. `delay(1000)` takes `step 1s`. The program starts at t = 0, with no bootloader delay.
+- `millis()`, `delay()` and the timers use simulated time. `delay(1000)` takes `step 1s`. The sketch starts about 66 ms after t = 0: the fuses hold the chip in reset for 16K CK, 14 CK and 65 ms, then Optiboot jumps to it. Step past that before a first `expect`.
+- Pressing `@nano.sw_reset` or `@uno.sw_reset` runs Optiboot's wait for an upload: L flashes three times and the sketch starts again about 1.53 s after the release. A byte on RX during that wait ends the run with `chip.unsupported_setting`.
 - D0 to D13 and A0 to A5 take `INPUT`, `INPUT_PULLUP` and `OUTPUT`. A Nano's A6 and A7 are analog only. `analogRead` reads them.
 - An undriven input keeps its last level. A real pin floats. Once the sketch reads it floating, `step` warns `chip.floating_input`, as in `#nano__mcu.pin.PD2 (nano.D2) floats on #net.nano__D2 at ... ps, and the firmware has taken in its level`. Use a pull-down, as in core, or `INPUT_PULLUP` to GND. Under `INPUT_PULLUP`, `digitalRead` reads the pull-up, so it stops once `pinMode(INPUT)` turns the pull-up off. `digitalRead` loads the whole port, so another `INPUT` pin warns too when a part, even a capacitor, is on it and nothing holds it.
 - `@nano.led_l` and `@uno.led_l` are the L LED. `INPUT_PULLUP` on D13 pulls the pin to about 1.45 V through that LED, so it reads low. An Uno that buffers D13 through an op-amp reads high. Use another pin for a pull-up input.

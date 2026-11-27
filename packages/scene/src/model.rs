@@ -30,8 +30,8 @@ const SCENE_KEYS: &[&str] = &[
 /// `"of": "angle"` on an `sg90`, a reading `"of": "screen"` and `view.screen`, and pin voltage
 /// `ratings` on `esp32s3`, `ssd1306`, `hd44780_i2c`, `hd44780` and `ws2812`. Format 7 is format 6 plus
 /// `steinhart_hart` world curves, a resistor's single-value maximum `ratings.voltage`,
-/// `characterized` on a rating, `ratings.reverse_voltage` on `diode` and `led`, and `ratings` on
-/// `potentiometer` and `switch`.
+/// `characterized` on a rating, `ratings.reverse_voltage` on `diode` and `led`, `ratings` on
+/// `potentiometer` and `switch`, and `start` and `bootloader` on `atmega328p`.
 pub const PART_FORMATS: &[u32] = &[1, 2, 3, 4, 5, 6, 7];
 /// Scene `format` values this binary reads.
 pub const SCENE_FORMATS: &[u32] = &[1];
@@ -51,7 +51,8 @@ const BASIS_FORMAT: u32 = 5;
 const VOLTAGE_FORMAT: u32 = 6;
 /// The oldest part format that carries `steinhart_hart` world curves, single-value resistor
 /// maximum `ratings.voltage`, `characterized` ratings, `diode`/`led` `ratings.reverse_voltage`,
-/// and `potentiometer`/`switch` `ratings` (refused by orbe 0.3.1).
+/// `potentiometer`/`switch` `ratings`, and `atmega328p` `start` and `bootloader` (refused by
+/// orbe 0.3.1).
 const CURVE_FORMAT: u32 = 7;
 /// The oldest part format whose readings take `"of": "angle"`.
 const ANGLE_FORMAT: u32 = 6;
@@ -2877,6 +2878,13 @@ fn decode_body(
                 .find(|prop| prop.key == "ratings")
         {
             gate(out, kind, "ratings", prop.key_span, CURVE_FORMAT, format);
+        }
+        if kind == "atmega328p" {
+            for prop in node.props().unwrap_or_default() {
+                if matches!(prop.key.as_str(), "start" | "bootloader") {
+                    gate(out, kind, &prop.key, prop.key_span, CURVE_FORMAT, format);
+                }
+            }
         }
         let ratings = node
             .get("ratings")

@@ -1,4 +1,4 @@
-use orbe_engine::mcu::Atmega328p;
+use orbe_engine::mcu::{Atmega328p, Bootloader, Start};
 use orbe_engine::netlist::{self, Chip, Model, Netlist};
 
 use orbe_engine::diagnostic::Diagnostic;
@@ -205,6 +205,43 @@ fn only_modes_the_model_runs_are_supported() {
             )]
         );
     }
+}
+
+/// Arduino's `boards.txt` burns high `0xDE` on the Uno and `0xDA` on the Nano, both with
+/// `BOOTRST` programmed, and Optiboot into the boot section.
+#[test]
+fn a_programmed_bootrst_needs_a_bootloader() {
+    for high in [0xDE, 0xDA] {
+        let fuses = |part: &mut serde_json::Value| part["fuses"]["high"] = high.into();
+        assert_eq!(
+            errors(fuses),
+            [format!(
+                r##""netlist.value" ["#u1"] {{"field":"fuses.high","rule":"unsupported","value":{high}.0}}"##
+            )]
+        );
+        let netlist = chip(|part| {
+            fuses(part);
+            part["bootloader"] = "optiboot".into();
+        })
+        .unwrap();
+        assert_eq!(values(&netlist).bootloader, Some(Bootloader::Optiboot));
+    }
+    let unknown = chip(|part| part["bootloader"] = "atmegaboot".into()).unwrap_err();
+    assert_eq!(
+        serde_json::to_value(&unknown[0]).unwrap()["code"],
+        "netlist.syntax"
+    );
+}
+
+#[test]
+fn a_part_starts_at_its_first_instruction_unless_it_names_power_on() {
+    assert_eq!(
+        values(&chip(|_| {}).unwrap()).start,
+        Start::FirstInstruction
+    );
+    let netlist = chip(|part| part["start"] = "power_on".into()).unwrap();
+    assert_eq!(values(&netlist).start, Start::PowerOn);
+    assert!(chip(|part| part["start"] = "first_instruction".into()).is_ok());
 }
 
 #[test]

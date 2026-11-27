@@ -1,6 +1,7 @@
 # Walk one lit LED from QA (led1) to QH (led8) and back, 100 ms a step.
 open
-step 50ms
+# The sketch starts 66 ms after power-on, when the start from reset the fuses set is over.
+step 116ms
 expect @led1 lit
 expect @led2 off
 expect @led3 off

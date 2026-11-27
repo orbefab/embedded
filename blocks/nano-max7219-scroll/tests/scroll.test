@@ -1,7 +1,8 @@
 # MD_Parola scrolls "ORBE" across all four chained MAX7219 modules over hardware SPI.
 open
 expect @matrix off
-step 300ms
+# The sketch starts 66 ms after power-on, when the start from reset the fuses set is over.
+step 366ms
 expect @matrix lit
 expect @matrix shows tests/scroll_1.screen
 step 300ms

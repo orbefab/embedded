@@ -2,7 +2,8 @@
 # sits at 5.995 V. Once the sketch commands 0 deg and the servo moves (140 mA), the 6 V rail sags
 # by 0.126 V to 5.874 V, then recovers to 5.995 V at the stop, and sweeps to 180 deg.
 open
-step 50ms
+# The sketch starts 66 ms after power-on, when the start from reset the fuses set is over.
+step 116ms
 expect @bat.pos > 5.98V
 expect @bat.pos < 6.00V
 step 100ms

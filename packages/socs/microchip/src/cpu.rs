@@ -7,8 +7,12 @@
 
 use orbe_avr::{Activity, Core, SpmNote};
 
+use crate::boot::{
+    Access, Bootloader, GETCH_WORD, OPTIBOOT_MCUSR_AT, OPTIBOOT_TO_APP, OPTIBOOT_WDCE_AT,
+    OPTIBOOT_WDT_OFF_AT, WAIT_FIRST, Wait,
+};
 use crate::bus::Bus;
-use crate::chip::{FLASH_WORDS, IRQ_CYCLES, RAMEND, USART0, VECTORS};
+use crate::chip::{FLASH_WORDS, IRQ_CYCLES, RAMEND, SPH, SPL, USART0, VECTORS};
 use crate::fuses::FuseBytes;
 use crate::irq;
 use crate::periph::system::{BORF, EXTRF, PORF, WDRF};
@@ -111,6 +115,20 @@ pub struct Cpu {
     /// The host's own reading of `VCC` against the brown-out window, from
     /// [`Self::set_brown_out`]: `true` below it. `None` reads `vcc_mv`.
     bod_low: Option<bool>,
+    /// What the boot section holds. It runs from the reset vector while `BOOTRST` is
+    /// programmed.
+    bootloader: Bootloader,
+    /// The start-up that runs is the bootloader's, not a wake.
+    booting: Option<Boot>,
+}
+
+/// What the bootloader does while the core waits on it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Boot {
+    /// Its way straight to the sketch, which ends with the first fetch.
+    ToApp,
+    /// Its wait for an upload, at the access that comes next.
+    Wait(Wait),
 }
 
 clone_fields!(Cpu {
@@ -121,7 +139,9 @@ clone_fields!(Cpu {
     vcc_mv,
     reset_held,
     bod_held,
-    bod_low
+    bod_low,
+    bootloader,
+    booting
 });
 
 /// Why [`Cpu::reset_as`] ran.
@@ -157,7 +177,24 @@ impl Cpu {
             reset_held: false,
             bod_held: false,
             bod_low: None,
+            bootloader: Bootloader::None,
+            booting: None,
         }
+    }
+
+    /// Supply rises at cycle 0, as a part does when its board is plugged in. The power-on reset
+    /// holds the core through the start from reset the fuses select, the start-up time and the
+    /// additional delay of Table 9-4 or 9-6 (§9.2.1, §11.3), and the bootloader runs after it
+    /// while `BOOTRST` is programmed. Only then is the first instruction of the image fetched.
+    /// A brown-out or a low `RESET` from the host holds it further, as in a run.
+    pub fn power_on(&mut self) {
+        assert_eq!(self.cycles(), 0, "power-on is the start of a run");
+        self.begin_reset_delay();
+    }
+
+    /// What the boot section holds. See [`crate::Bootloader`].
+    pub fn set_bootloader(&mut self, bootloader: Bootloader) {
+        self.bootloader = bootloader;
     }
 
     /// Power-on reset that restarts the host timeline.
@@ -225,8 +262,8 @@ impl Cpu {
         self.bus.fuses().bytes
     }
 
-    /// Word address `BOOTRST` selects. The model still fetches the image from 0:
-    /// no boot loader is present.
+    /// Word address `BOOTRST` selects. The model fetches the image from 0, after the
+    /// bootloader's way there when one is set.
     pub fn boot_word(&self) -> u16 {
         let fuses = self.bus.fuses();
         if fuses.bootrst { fuses.boot_word } else { 0 }
@@ -602,9 +639,119 @@ impl Cpu {
             self.bus.release_epoch(self.cycles());
             self.core.set_activity(Activity::Fetch);
             self.bus.arm_watchdog();
+            self.start_bootloader();
             return;
         }
-        self.complete_wake();
+        match self.booting {
+            Some(Boot::ToApp) => self.finish_bootloader(),
+            Some(Boot::Wait(wait)) => self.wait_for_upload(wait),
+            None => self.complete_wake(),
+        }
+    }
+
+    /// The reset has released, and the reset vector is the boot section's. The bootloader runs
+    /// with the clocks running, so the prescaler and the watchdog count from the release. See
+    /// [`crate::boot`].
+    fn start_bootloader(&mut self) {
+        let boot_word = self.boot_word();
+        if boot_word == 0 {
+            return;
+        }
+        let Some(cycles) = self.bootloader.to_app(boot_word) else {
+            return;
+        };
+        let until = if self.bus.mcusr() & EXTRF != 0 {
+            // `optiboot.c` `main`: with `EXTRF` set it waits for an upload.
+            self.booting = Some(Boot::Wait(Wait::START));
+            let erased = cycles - OPTIBOOT_TO_APP;
+            self.cycles() + erased + WAIT_FIRST
+        } else {
+            self.booting = Some(Boot::ToApp);
+            self.cycles().saturating_add(cycles)
+        };
+        self.core.set_activity(Activity::Startup {
+            until,
+            from_reset: false,
+        });
+    }
+
+    /// What Optiboot leaves for the sketch. Its stores, each on its own cycle counted back from
+    /// the sketch's first fetch: `MCUSR = 0`, then `WDTCSR = WDCE | WDE` and `WDTCSR = 0`, which
+    /// turns the watchdog off now that `WDRF` is clear, unless `WDTON` holds it on (Table 11-1).
+    /// Its registers: `r1`, `r24`, `r30` and `r31` are 0, `r25` is `0x18`, and `SREG` has `Z`
+    /// from the last `EOR`. Its stack: the
+    /// `rcall appStart` never returns, so `SP` stays two below `RAMEND` over that return address,
+    /// `0x3F05`, and the return address of `rcall watchdogConfig`, `0x3FF7`, sits below it.
+    fn finish_bootloader(&mut self) {
+        self.booting = None;
+        let start = self.cycles() - OPTIBOOT_TO_APP;
+        const { assert!(OPTIBOOT_MCUSR_AT < OPTIBOOT_WDCE_AT) };
+        self.bus.set_mcusr(0);
+        self.bus
+            .write_wdtcsr(0x18, start + OPTIBOOT_WDCE_AT, start + OPTIBOOT_WDT_OFF_AT);
+        for (reg, value) in [(1, 0), (24, 0), (25, 0x18), (30, 0), (31, 0)] {
+            self.core.set_reg(reg, value);
+        }
+        // `eor r31, r31` last sets `Z` and clears `S`, `V` and `N` (DS40002198B, `EOR`).
+        self.core.set_sreg(self.core.sreg() & !0x1E | 0x02);
+        for (k, byte) in [0x3F, 0xF7, 0x3F, 0x05].into_iter().enumerate() {
+            self.poke(RAMEND - 3 + k as u16, byte);
+        }
+        let sp = RAMEND - 2;
+        self.poke(SPL, sp as u8);
+        self.poke(SPH, (sp >> 8) as u8);
+        self.core.set_activity(Activity::Fetch);
+    }
+
+    /// Makes `wait`'s access on this cycle, the cycle its instruction starts, with the bus
+    /// calls `Core::step` makes for it, retires that instruction as [`Self::retire`] does, and
+    /// waits for the next. The 1 s watchdog ends the wait with a reset, unless a byte reaches
+    /// `getch` first.
+    fn wait_for_upload(&mut self, wait: Wait) {
+        use orbe_avr::Bus as _;
+        let start = self.cycles();
+        let access = wait.access();
+        let set = match access {
+            Access::Store {
+                addr,
+                value,
+                cycles,
+            } => {
+                self.bus.store(&mut self.core, addr, value, cycles);
+                false
+            }
+            Access::SetBit { addr, bit } => {
+                self.bus.write_bit(&mut self.core, addr, bit, true);
+                false
+            }
+            Access::Wdr => {
+                self.bus.watchdog_reset_timer();
+                false
+            }
+            Access::SkipIfSet { addr, bit } => self.bus.peek(&self.core, addr) & (1 << bit) != 0,
+            Access::Load { addr, bit } => self.bus.load(&self.core, addr) & (1 << bit) != 0,
+        };
+        let stall = u64::from(self.bus.take_stall());
+        let spent = access.cycles(set) + stall;
+        self.core.advance_cycles(spent);
+        self.bus.tick(spent);
+        if self.bus.take_wdt_reset() {
+            self.perform_reset(ResetKind::Watchdog, ResetWhen::Delay);
+            return;
+        }
+        let (next, cycles) = wait.next(set).unwrap_or_else(|| {
+            let what = Refused::Unsimulated {
+                peripheral: "Optiboot",
+                what: "the upload a byte on RXD starts after a reset from the RESET pin",
+            };
+            self.bus.refuse(what, self.cycles(), GETCH_WORD);
+            (wait, 5)
+        });
+        self.booting = Some(Boot::Wait(next));
+        self.core.set_activity(Activity::Startup {
+            until: start + cycles + stall,
+            from_reset: false,
+        });
     }
 
     fn complete_wake(&mut self) {
@@ -658,6 +805,7 @@ impl Cpu {
         let epochs = self.bus.epochs();
         let program = self.core.program();
         let clock = self.clock_hz;
+        let bootloader = self.bootloader;
         let host = self.host_serial;
         let asks = self.bus.asks_for_samples();
         let pins = self.bus.pin_levels();
@@ -667,6 +815,7 @@ impl Cpu {
         let i2c = self.bus.take_i2c_across_reset();
         *self = Self::new();
         self.clock_hz = clock;
+        self.bootloader = bootloader;
         self.bus.set_osc_hz(clock);
         self.vcc_mv = vcc;
         self.bod_low = bod_low;
