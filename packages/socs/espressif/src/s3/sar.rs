@@ -106,6 +106,8 @@ const XPD_ON: u32 = 0b11 << 29;
 pub(crate) const SARADC_BIT: u32 = 1 << 30;
 /// `TSENS_CLK_EN` and `TSENS_RESET`.
 pub(crate) const TSENS_BIT: u32 = 1 << 29;
+/// `SENS_IOMUX_CLK_EN` in `SENS_SAR_PERI_CLK_GATE_CONF_REG`, the RTC IO MUX's clock.
+pub(crate) const IOMUX_CLK_EN: u32 = 1 << 31;
 /// `SARADC_MEAS_STATUS`, which reads 0, and the I2C slave addresses, which have no effect here.
 pub(crate) const SLAVE_ADDRS: u32 = 0x003f_ffff;
 /// `ADC_ARB_GRANT_FORCE` and `ADC_ARB_RTC_FORCE`, `soc/esp32s3/register/soc/apb_saradc_reg.h`.

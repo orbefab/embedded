@@ -47,20 +47,22 @@ impl Circuit {
     }
 
     /// The netlist's active chips, then `extra`, then the network when the netlist has one. Only
-    /// a test passes `extra`, a script chip with no netlist kind.
+    /// a test passes `extra`, a script chip with no netlist kind. With the network, a chip with a
+    /// radio is built with it.
     pub(crate) fn with_actives(
         netlist: Netlist,
         extra: Vec<active::Chip>,
     ) -> Result<Circuit, Diagnostic> {
         let mut passives = Vec::new();
         let mut actives = Vec::new();
+        let radio = netlist.network().is_some();
         for (id, part) in netlist.parts() {
             if chip::passive(&part.model).is_some() {
                 passives.push(id);
             } else if let Model::Chip(chip) = &part.model
                 && let chip::Kind::Active(kind) = chip::kind(chip)
             {
-                actives.push(active::chip(id, kind));
+                actives.push(active::chip(id, kind, radio));
             }
         }
         actives.extend(extra);
