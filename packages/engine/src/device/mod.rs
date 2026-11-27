@@ -1,11 +1,14 @@
 //! Built-in devices. A device on the `orbe-model` contract is a folder: `model.rs` is the device,
 //! written against `orbe-model` and `std` alone, and `mod.rs` holds its netlist struct, its JSON
-//! wire type and its [`Row`], which `Model::device` maps its parts to.
+//! wire type and its [`Row`], which `Model::device` maps its parts to. The `hd44780_i2c`
+//! backpack has no `model.rs` of its own: its device sits beside the HD44780U controller it
+//! shares with `hd44780`, in `hd44780/backpack.rs`, which `hd44780/model.rs` includes.
 
 pub(crate) mod bmp280;
 pub(crate) mod cst816;
 pub(crate) mod dht22;
 pub(crate) mod hc595;
+pub mod hd44780;
 pub mod hd44780_i2c;
 pub mod max7219;
 pub(crate) mod pulses_replay;
@@ -19,6 +22,7 @@ pub use bmp280::Bmp280;
 pub use cst816::Cst816;
 pub use dht22::Dht22;
 pub use hc595::Hc595;
+pub use hd44780::Hd44780;
 pub use hd44780_i2c::Hd44780I2c;
 pub use max7219::Max7219;
 pub use pulses_replay::{PulseTrain, PulsesReplay};

@@ -1,0 +1,73 @@
+// The LED backlight of a 1602 character LCD module, from A (pin 15) to K (pin 16). Vishay
+// LCD-016N002B p. 1 gives its forward voltage, 4.2 V typical at 25 C, and an edge-lit forward
+// current of 20 mA typical and 40 mA maximum, and no curve. The fit keeps the curve shape of
+// the Kingbright L-934QWC-D white LED and moves it to pass 4.2 V at 20 mA.
+{
+  "format": 6,
+  "part": "lcd1602-backlight",
+  "version": "0.1.0",
+  "title": "LED backlight, 16 x 2 character LCD",
+  "summary": "The LED backlight inside the lcd1602 module, from A to K: 4.2 V typical at 20 mA, 40 mA maximum.",
+  "tags": ["lcd", "1602", "backlight", "led"],
+  "license": "MIT OR Apache-2.0",
+  "docs": {
+    "Vishay LCD-016N002B, Document Number 37295": "https://www.vishay.com/docs/37295/lcd016n002b.pdf",
+    "Kingbright L-934QWC-D, Spec No DSAE9128, Rev V.3": null,
+  },
+  "real": {
+    "generic": true,
+    "maker": "Vishay",
+    "number": "LCD-016N002B",
+    "datasheet": "Vishay LCD-016N002B, Document Number 37295",
+  },
+  "pins": { "anode": [1], "cathode": [2] },
+  "model": {
+    "kind": "led",
+    "saturation_current": {
+      "value": 5.041e-14,
+      "unit": "A",
+      "source": { "closed_form": { "note": "Vishay LCD-016N002B p. 1, LED forward voltage 4.2 V typical at the edge LED's 20 mA typical, on the curve shape of the Kingbright L-934QWC-D white fit (emission coefficient 5.534, series resistance 20.14 ohm) at kT/q for 298.15 K" } },
+    },
+    "emission_coefficient": {
+      "value": 5.534,
+      "unit": "1",
+      "source": { "datasheet": { "doc": "Kingbright L-934QWC-D, Spec No DSAE9128, Rev V.3", "at": "Fig. Forward Current vs. Forward Voltage, TA = 25 C; fit through (2.62 V, 2 mA), (3.01 V, 10 mA), (3.31 V, 20 mA) at kT/q for 298.15 K. The module sheet draws no curve.", "basis": "typical" } },
+    },
+    "series_resistance": {
+      "value": 20.14,
+      "unit": "ohm",
+      "source": { "datasheet": { "doc": "Kingbright L-934QWC-D, Spec No DSAE9128, Rev V.3", "at": "Fig. Forward Current vs. Forward Voltage, TA = 25 C; fit through (2.62 V, 2 mA), (3.01 V, 10 mA), (3.31 V, 20 mA) at kT/q for 298.15 K. The module sheet draws no curve.", "basis": "typical" } },
+    },
+    "ratings": {
+      "current": {
+        "value": 0.04,
+        "unit": "A",
+        "basis": { "sustained": { "average": "mean", "tau": { "value": 0.0102, "unit": "s", "source": { "closed_form": { "note": "The sheet gives no pulse rating, so this is the 10.2 ms default, five periods of a 490 Hz PWM." } } } } },
+        "source": { "datasheet": { "doc": "Vishay LCD-016N002B, Document Number 37295", "at": "p. 1, Electrical Characteristics, LED forward current, edge, 40 mA maximum at 25 C", "basis": "max" } },
+      },
+      "power": {
+        "value": 0.184,
+        "unit": "W",
+        "basis": { "sustained": { "average": "mean", "tau": { "value": 0.0102, "unit": "s", "source": { "closed_form": { "note": "The sheet gives no pulse rating, so this is the 10.2 ms default, five periods of a 490 Hz PWM." } } } } },
+        "source": { "closed_form": { "note": "Vishay LCD-016N002B p. 1 rates no dissipation. This is its 40 mA maximum edge forward current at its 4.6 V maximum forward voltage, the most the sheet's own limits allow." } },
+      },
+    },
+  },
+  "readings": {
+    "lit": { "of": "i", "above": { "value": 0.002, "unit": "A", "source": { "datasheet": { "doc": "Kingbright L-934QWC-D, Spec No DSAE9128, Rev V.3", "at": "The lowest point of the forward-voltage fit whose shape this backlight takes, 2 mA", "basis": "typical" } } } },
+  },
+  "not_simulated": [
+    {
+      "what": "the forward curve",
+      "why": "Vishay gives one point, 4.2 V typical at 20 mA, and 4.6 V maximum. The rest of the curve is the Kingbright white LED's shape through that point, so below and above 20 mA it is that shape, not this backlight's.",
+    },
+    {
+      "what": "light",
+      "why": "The engine reports current, not luminance. The panel reads the backlight lit from A - K at the 2 mA point of this fit, and its glass shows characters only then.",
+    },
+    {
+      "what": "temperature and reverse breakdown",
+      "why": "The fit is at 25 C and the engine's LED has no breakdown voltage. The sheet rates no reverse voltage.",
+    },
+  ],
+}

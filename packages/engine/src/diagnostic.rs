@@ -178,7 +178,8 @@ pub enum WaveformRule {
     Equal,
 }
 
-/// Which rule of its protocol a chip saw broken. The chip drops what broke it.
+/// Which rule of its protocol a chip saw broken. The chip drops what broke it, except an
+/// HD44780 bus timing or contrast rule: that cycle still runs, and the glass shows what it shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProtocolRule {
@@ -214,16 +215,35 @@ pub enum ProtocolRule {
     BusWidth,
     /// A 5×10 font selection on a 5×8 character LCD.
     Font,
-    /// An HD44780 command or data write arrived before its power-on reset wait elapsed (15 ms
-    /// after VCC reaches 4.5 V, or 40 ms after 2.7 V).
+    /// An HD44780 command or data write arrived after its internal reset's busy time and before
+    /// its power-on reset wait elapsed (15 ms after VCC reaches 4.5 V), and ran.
     InitWait,
     /// A digital input sat between its guaranteed `VIL` and `VIH` thresholds longer than a normal
     /// edge transition, where the datasheet does not guarantee the logic level.
     InputLevel,
+    /// An HD44780 `E` rose sooner after the last rise than the enable cycle time, tcycE.
+    EnableCycle,
+    /// An HD44780 `E` pulse was shorter than the enable pulse width, PWEH.
+    EnableWidth,
+    /// An HD44780 `RS` or `R/W` changed less than tAS before `E` rose, or its data less than
+    /// tDSW before `E` fell.
+    Setup,
+    /// An HD44780 `RS` or `R/W` changed less than tAH after `E` fell or while `E` was high, or
+    /// its data less than tH after a write's fall.
+    Hold,
+    /// An HD44780 display was on with `VDD - V0` under the LCD voltage floor, so its glass
+    /// shows no characters.
+    Contrast,
+    /// An HD44780 command or data write arrived inside its internal reset's busy time (10 ms
+    /// after VCC reaches 4.5 V, or the 40 ms wait below it), and was dropped.
+    InitBusy,
+    /// An HD44780 module ran a bus cycle with its supply under the module's minimum operating
+    /// voltage.
+    LowSupply,
 }
 
 impl ProtocolRule {
-    pub(crate) const ALL: [ProtocolRule; 16] = [
+    pub(crate) const ALL: [ProtocolRule; 23] = [
         ProtocolRule::Command,
         ProtocolRule::PixelFormat,
         ProtocolRule::SdaWhileSclHigh,
@@ -240,6 +260,13 @@ impl ProtocolRule {
         ProtocolRule::Font,
         ProtocolRule::InitWait,
         ProtocolRule::InputLevel,
+        ProtocolRule::EnableCycle,
+        ProtocolRule::EnableWidth,
+        ProtocolRule::Setup,
+        ProtocolRule::Hold,
+        ProtocolRule::Contrast,
+        ProtocolRule::InitBusy,
+        ProtocolRule::LowSupply,
     ];
 
     /// Its place in [`ALL`](Self::ALL).
@@ -266,6 +293,13 @@ impl ProtocolRule {
             "font" => Some(ProtocolRule::Font),
             "init_wait" => Some(ProtocolRule::InitWait),
             "input_level" => Some(ProtocolRule::InputLevel),
+            "enable_cycle" => Some(ProtocolRule::EnableCycle),
+            "enable_width" => Some(ProtocolRule::EnableWidth),
+            "setup" => Some(ProtocolRule::Setup),
+            "hold" => Some(ProtocolRule::Hold),
+            "contrast" => Some(ProtocolRule::Contrast),
+            "init_busy" => Some(ProtocolRule::InitBusy),
+            "low_supply" => Some(ProtocolRule::LowSupply),
             _ => None,
         }
     }
@@ -1482,8 +1516,32 @@ impl Diagnostic {
             } => {
                 let part = namer(part);
                 format!(
-                    "{part} dropped a write before the HD44780U power-on reset wait elapsed (15 ms after VCC reaches 4.5 V, or 40 ms after 2.7 V), breaking rule {} at {} ps, the first time",
+                    "{part} ran a write that came after the HD44780U internal reset's busy time but before its power-on reset wait elapsed (15 ms after VCC reaches 4.5 V), earlier than the sheet allows, breaking rule {} at {} ps, the first time",
                     rule_text(&ProtocolRule::InitWait),
+                    at.as_ps()
+                )
+            }
+            Diagnostic::ChipProtocol {
+                part,
+                at,
+                rule: ProtocolRule::InitBusy,
+            } => {
+                let part = namer(part);
+                format!(
+                    "{part} dropped a write that came inside the HD44780U internal reset's busy time (10 ms after VCC reaches 4.5 V, or the 40 ms wait after 2.7 V below it), breaking rule {} at {} ps, the first time",
+                    rule_text(&ProtocolRule::InitBusy),
+                    at.as_ps()
+                )
+            }
+            Diagnostic::ChipProtocol {
+                part,
+                at,
+                rule: ProtocolRule::LowSupply,
+            } => {
+                let part = namer(part);
+                format!(
+                    "{part} ran a bus cycle with its supply under the module's minimum operating voltage, outside its sheet, breaking rule {} at {} ps, the first time",
+                    rule_text(&ProtocolRule::LowSupply),
                     at.as_ps()
                 )
             }
@@ -1497,6 +1555,48 @@ impl Diagnostic {
                     "{part} had a logic input held between VIL and VIH at {} ps, where the logic level is not guaranteed, breaking rule {}, the first time",
                     at.as_ps(),
                     rule_text(&ProtocolRule::InputLevel)
+                )
+            }
+            Diagnostic::ChipProtocol {
+                part,
+                at,
+                rule:
+                    rule @ (ProtocolRule::EnableCycle
+                    | ProtocolRule::EnableWidth
+                    | ProtocolRule::Setup
+                    | ProtocolRule::Hold),
+            } => {
+                let part = namer(part);
+                let what = match rule {
+                    ProtocolRule::EnableCycle => {
+                        "E rose sooner after its last rise than the HD44780U enable cycle time (tcycE)"
+                    }
+                    ProtocolRule::EnableWidth => {
+                        "an E pulse was shorter than the HD44780U enable pulse width (PWEH)"
+                    }
+                    ProtocolRule::Setup => {
+                        "RS, R/W or data changed inside the HD44780U set-up time before an E edge (tAS, tDSW)"
+                    }
+                    _ => {
+                        "RS, R/W or data changed inside the HD44780U hold time after E fell (tAH, tH)"
+                    }
+                };
+                format!(
+                    "{part} took a bus cycle where {what}, breaking rule {} at {} ps, the first time",
+                    rule_text(rule),
+                    at.as_ps()
+                )
+            }
+            Diagnostic::ChipProtocol {
+                part,
+                at,
+                rule: ProtocolRule::Contrast,
+            } => {
+                let part = namer(part);
+                format!(
+                    "{part} has its display on with VDD - V0 under the HD44780U LCD voltage floor, so its glass shows no characters; wire V0 to a contrast pot's wiper turned toward VSS, breaking rule {} at {} ps, the first time",
+                    rule_text(&ProtocolRule::Contrast),
+                    at.as_ps()
                 )
             }
             Diagnostic::ChipProtocol { part, at, rule } => {

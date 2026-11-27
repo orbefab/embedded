@@ -4,7 +4,7 @@
 {
   "format": 6,
   "part": "hd44780-1602-i2c",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "title": "Character LCD panel, 16 x 2, HD44780 + PCF8574 I2C",
   "summary": "Blue 16 x 2 character LCD with an HD44780U controller and a PCF8574 I2C interface at address 0x27: the panel inside the lcd1602-i2c module.",
   "tags": ["lcd", "1602", "16x2", "hd44780", "pcf8574", "display", "screen", "i2c"],
@@ -125,8 +125,12 @@
       "why": "On a blue negative transmissive 1602 LCD, characters are only visible when both the display and the backlight are on. `text` returns two 16-space blank lines when either is off.",
     },
     {
+      "what": "oscillator tolerance",
+      "why": "The controller runs at its typical 270 kHz. The sheet gives 190 to 350 kHz with Rf = 91 kohm at 5 V (Hitachi p. 52), and the busy times and the blink scale with it. The blinking character switches every 379.3 ms, the sheet's 409.6 ms at 250 kHz (p. 26) at 270 kHz, on multiples of that from power-on.",
+    },
+    {
       "what": "8-bit bus use and 5x10 font",
-      "why": "Only D4 to D7 are wired on a PCF8574 backpack. Any non-Function-Set operation in 8-bit mode warns `chip.protocol` rule `bus_width` and is dropped. Requesting the 5x10 font (`F = 1`) warns rule `font` and keeps the 5x8 font.",
+      "why": "Only D4 to D7 are wired on a PCF8574 backpack. Any non-Function-Set operation in 8-bit mode warns `chip.protocol` rule `bus_width` and is dropped. Requesting one line of the 5x10 font (`N = 0`, `F = 1`) warns rule `font` and keeps the 5x8 font. With two lines `F` is don't care (Hitachi Table 8, p. 29).",
     },
   ],
 }

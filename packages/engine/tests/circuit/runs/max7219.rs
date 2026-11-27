@@ -10,6 +10,12 @@ use orbe_engine::display::{art, lit_count};
 use orbe_engine::name::Name;
 use orbe_model::Time;
 
+/// How many of `u1`'s glass pixels read lit.
+fn lit_of(session: &Session) -> usize {
+    let display = session.display(&Name::new("u1").unwrap()).unwrap();
+    lit_count(&display.panel(), &display.pixels())
+}
+
 fn val(value: f64, unit: &str) -> serde_json::Value {
     serde_json::json!({ "value": value, "unit": unit })
 }
@@ -212,7 +218,7 @@ fn single_chip_rset_intensity_scan_and_shutdown_work_end_to_end() {
         let frame = disp.image();
         let px = disp.pixels();
         let grid = dot_brightness(&panel, &frame);
-        (lit_count(&px), art(panel.width, &px), grid[0][0])
+        (lit_count(&panel, &px), art(&panel, &px), grid[0][0])
     };
 
     let (lit_hi, rows, bright_hi) = run_with(10_000.0, 15, 7, false);
@@ -291,7 +297,7 @@ fn four_chained_chips_shift_distinct_rows_via_dout() {
         ("u4", "#......#"),
     ] {
         let disp = session.display(&Name::new(name).unwrap()).unwrap();
-        let rows = art(disp.panel().width, &disp.pixels());
+        let rows = art(&disp.panel(), &disp.pixels());
         assert_eq!(
             rows.lines().next().unwrap(),
             expected_row0,
@@ -323,10 +329,7 @@ fn missing_load_reversed_din_dout_and_unpowered_leave_matrix_blank() {
         ],
     });
     let s = run_session(missing_load);
-    assert_eq!(
-        lit_count(&s.display(&Name::new("u1").unwrap()).unwrap().pixels()),
-        0
-    );
+    assert_eq!(lit_of(&s), 0);
 
     // 2) Reversed DIN/DOUT: MCU drives DOUT while DIN sits at GND -> matrix stays blank
     let mut wave2 = SpiWave::new();
@@ -350,10 +353,7 @@ fn missing_load_reversed_din_dout_and_unpowered_leave_matrix_blank() {
         ],
     });
     let s2 = run_session(reversed);
-    assert_eq!(
-        lit_count(&s2.display(&Name::new("u1").unwrap()).unwrap().pixels()),
-        0
-    );
+    assert_eq!(lit_of(&s2), 0);
 
     // 3) Unpowered (0 V): stays blank and draws nothing
     let unpowered = serde_json::json!({
@@ -372,10 +372,7 @@ fn missing_load_reversed_din_dout_and_unpowered_leave_matrix_blank() {
         ],
     });
     let s3 = run_session(unpowered);
-    assert_eq!(
-        lit_count(&s3.display(&Name::new("u1").unwrap()).unwrap().pixels()),
-        0
-    );
+    assert_eq!(lit_of(&s3), 0);
 }
 
 #[test]
@@ -404,7 +401,7 @@ fn outside_datasheet_supply_and_current_keep_working_and_warn() {
     let disp = s.display(&Name::new("u1").unwrap()).unwrap();
     let panel = disp.panel();
     let frame = disp.image();
-    assert_eq!(lit_count(&disp.pixels()), 64);
+    assert_eq!(lit_count(&panel, &disp.pixels()), 64);
     let dot_a = dot_brightness(&panel, &frame)[0][0];
     assert!(
         dot_a > 0.0656 && (dot_a - 0.06592).abs() < 0.0005,
@@ -454,7 +451,7 @@ fn exact_vih_3v5_and_vil_0v8_work_while_3v3_logic_warns_input_level() {
             ],
         });
         let s = run_session(doc);
-        let lit = lit_count(&s.display(&Name::new("u1").unwrap()).unwrap().pixels());
+        let lit = lit_of(&s);
         (lit, s.diagnostics())
     };
 
@@ -509,10 +506,7 @@ fn exact_vih_3v5_and_vil_0v8_work_while_3v3_logic_warns_input_level() {
         ],
     });
     let s_rc = run_session(rc_doc);
-    assert_eq!(
-        lit_count(&s_rc.display(&Name::new("u1").unwrap()).unwrap().pixels()),
-        8
-    );
+    assert_eq!(lit_of(&s_rc), 8);
     assert!(s_rc.diagnostics().is_empty(), "{:?}", s_rc.diagnostics());
 }
 
@@ -547,7 +541,7 @@ fn supply_dip_retains_registers_down_to_2v_and_resets_below_2v() {
             "dip={dip_v}V: {:?}",
             s.diagnostics()
         );
-        lit_count(&s.display(&Name::new("u1").unwrap()).unwrap().pixels())
+        lit_of(&s)
     };
 
     for dip in [3.999, 3.3, 2.5, 2.0] {

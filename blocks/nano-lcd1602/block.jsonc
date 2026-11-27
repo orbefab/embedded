@@ -1,0 +1,11 @@
+// A Block: a small circuit that works. `orbe add nano-lcd1602` installs it into a project.
+{
+  "format": 1,
+  "block": "nano-lcd1602",
+  "version": "0.1.0",
+  "title": "Hello on a 16x2 parallel LCD",
+  "summary": "An Arduino Nano runs the LiquidCrystal HelloWorld example on a blue 16 x 2 HD44780 LCD over a 4-bit parallel bus, with a 10k trimmer setting the contrast. The top line reads hello, world! and the bottom line counts seconds.",
+  "board": "nano-board",
+  "tags": ["lcd", "1602", "16x2", "hd44780", "parallel", "liquidcrystal", "display", "screen", "nano"],
+  "license": "(MIT OR Apache-2.0) AND LGPL-2.1-or-later AND BSD-3-Clause AND GPL-3.0-or-later WITH GCC-exception-3.1",
+}

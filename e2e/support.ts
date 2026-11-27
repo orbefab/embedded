@@ -276,7 +276,7 @@ export function blockKind(scene: string, id: string): BlockKind {
   if (/"type"\s*:\s*"keypad-4x4"/.test(code)) return "keypad";
   if (/"type"\s*:\s*"led-5mm-rgb-cc"/.test(code) || /"type"\s*:\s*"led-5mm-rgb-ca"/.test(code)) return "rgbled";
   if (/"type"\s*:\s*"oled-ssd1306-128x64"/.test(code)) return "screen";
-  if (/"type"\s*:\s*"lcd1602-i2c"/.test(code)) return "lcd";
+  if (/"type"\s*:\s*"lcd1602(-i2c)?"/.test(code)) return "lcd";
   if (/"type"\s*:\s*"max7219-matrix-8x8"/.test(code) || /"type"\s*:\s*"max7219-matrix-4in1"/.test(code)) return "matrix";
   if (/"type"\s*:\s*"hc595-dip16"/.test(code)) return "shift";
   if (/"type"\s*:\s*"gy-bmp280"/.test(code)) return "serial";

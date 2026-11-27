@@ -157,6 +157,7 @@ fn search_ranks_an_exact_id_then_whole_words_then_the_rest() {
     assert_eq!(
         title_hits,
         [
+            "lcd1602-backlight",
             "led-0603",
             "led-0805",
             "led-3mm",

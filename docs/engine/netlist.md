@@ -1171,14 +1171,38 @@ A break is `netlist.value` with the dotted field, and a wrong unit is `netlist.u
 
 An `ssd1306` has no `i`, `v`, or `p`. Its `ratings` object is optional, with `rail_margin` and `supply_voltage`. Its logic signals are `SCL`, `SDA` and `RES`. It joins `SDA` to `VSS` through the stage its drive stamps. `SCL` and `RES` draw no current, so each needs another DC path, and so does `VDD`, whose draw is a current.
 
+### HD44780
+
+`kind` is `hd44780`, a 16 by 2 character LCD module (Hitachi HD44780U, ADE-207-272) on the controller's own parallel bus. It is an active chip with no clock of its own. Pins are the module's 16, `VSS`, `VDD`, `V0`, `RS`, `RW`, `E`, `D0` to `D7`, `A` and `K`, each required. It runs the same controller as an `hd44780_i2c`, so the power-on state, the reset wait and busy time, the commands, the reads and rule `font` are the ones [HD44780 I2C](#hd44780-i2c) lists. `bus_width` never fires, since all eight data lines reach the controller.
+
+- An `E` rise then fall is one bus cycle. A write (`RW` low) latches `RS` and the data on the fall: `D4` to `D7` in 4-bit mode, one nibble a cycle, and all eight lines in 8-bit mode. A read (`RW` high) drives the busy flag and address counter, or the data, on `D4` to `D7` in 4-bit mode and on all eight in 8-bit mode, from `tDDR` after the rise to `tDHR` after the fall. A fall with no rise since power-on, as when a sketch first drives a floating `E`, is not a cycle, and neither is `RS` moving under such an `E`.
+- Each cycle checks the bus timing table for the supply, p. 52 from 4.5 V and p. 49 below. A cycle that breaks one still runs and warns `chip.protocol`: rule `enable_cycle` for a rise sooner than `tcycE` after the last, `enable_width` for a high shorter than `PWEH`, `setup` for `RS` or `RW` moving less than `tAS` before the rise or a write's data less than `tDSW` before the fall, and `hold` for `RS` or `RW` moving less than `tAH` after the fall or while `E` is high, or a write's data less than `tH` after the fall. Rise and fall times are not checked.
+- `D0` to `D7`, `RS` and `RW` each pull up to `VDD` through `pull_up`, so a line a 4-bit circuit leaves open reads high. `D0` to `D7` drive a read through `output`. The bus reads through `input_threshold`, fractions of `V(VDD) - V(VSS)`.
+- The controller runs while `V(VDD) - V(VSS)` is at least 2.7 V. Below it the part drives nothing, draws nothing, and loses its RAM and registers. A bus cycle whose `E` rises with `V(VDD) - V(VSS)` under `operating_voltage`, the module's minimum operating supply, runs as the controller runs at that supply and warns `chip.protocol` rule `low_supply`.
+- The backlight is lit while `V(A) - V(K)` is at least `backlight_voltage`, the backlight LED's lit current, whatever `VDD`. The glass shows text only while the controller runs, the backlight is lit and `V(VDD) - V(V0)` is at least `lcd_voltage`. With the display on and `V(VDD) - V(V0)` under `lcd_voltage` it warns `chip.protocol` rule `contrast`. `V0` and `A` to `K` draw nothing here. The module's own parts carry those currents.
+- `draw` draws `logic_current` from `VDD` into `VSS` while the controller runs, held above `holds_above`.
+
+| Field | Unit | Rule |
+| --- | --- | --- |
+| `output.high_drop`, `output.low_drop` | `V` | at least 0, else rule `non_negative` |
+| `output.high_resistance`, `output.low_resistance`, `pull_up` | `ohm` | the resistor's |
+| `input_threshold.low`, `input_threshold.high` | `1` | inside (0, 1), else rule `fraction` |
+| `lcd_voltage`, `backlight_voltage`, `operating_voltage` | `V` | greater than 0, else rule `positive` |
+| `draw.logic_current` | `A` | at least 0, else rule `non_negative` |
+| `draw.holds_above` | `V` | greater than 0, else rule `positive` |
+| `ratings.rail_margin`, `ratings.supply_voltage` | `V` | optional `ratings` object; each greater than 0 or `null` |
+
+An `hd44780` has no `i`, `v`, or `p`. Its `ratings` object is optional, with `rail_margin` and `supply_voltage`. Its logic signals are `RS`, `RW`, `E` and `D0` to `D7`. Each data line joins `VDD` and `VSS` through its stages, and `RS` and `RW` join `VDD` through their pull-ups. `E` draws no current, so it needs another DC path.
+
 ### HD44780 I2C
 
 `kind` is `hd44780_i2c`, a 16 by 2 character LCD (Hitachi HD44780U, ADE-207-272) driven through a PCF8574 I2C backpack. It is an active chip with no clock of its own, and an I2C target at `address`, 0x20 to 0x27 (default 0x27). Pins are `VCC`, `GND`, `SCL` and `SDA`, each required. `SDA` is open drain into `GND`, `low_drop` over `GND` behind `low_resistance`. `SCL` is an input, held by neither.
 
 The PCF8574 is an 8-bit quasi-bidirectional port: I2C writes set the port latch, and I2C reads return the port pins (`P0 = RS`, `P1 = RW`, `P2 = E`, `P3 = backlight`, `P4..P7 = D4..D7`). On each falling edge of `E`, the HD44780U executes the 4-bit write (when `RW = 0`) or completes the nibble read (when `RW = 1`):
 
-- Power-on state (ADE-207-272 p. 23, Figs. 23–24 pp. 45–46): 8-bit interface, 1-line, 5x8 font, display off, cursor off, blink off, increment mode, no shift, DDRAM filled with `0x20`, CGRAM zeroed. The power-on reset wait lasts 15 ms after `VCC` reaches 4.5 V, or 40 ms after `VCC` reaches 2.7 V when `VCC` stays below 4.5 V; any command or data write arriving earlier warns `chip.protocol` rule `init_wait` and is dropped as busy.
-- 8-bit-to-4-bit init sequence (ADE-207-272 Fig. 24): function-set nibbles `0x3` keep 8-bit mode; `0x2` switches to 4-bit mode, after which two nibbles (high then low) assemble each command or data byte. Any other command sent in 8-bit mode, or a 4-bit function set with `DL = 1`, stops loudly with rule `bus_width`. Selecting the 5x10 font (`F = 1`) stops loudly with rule `font`.
+- Power-on state (ADE-207-272 p. 23, Figs. 23–24 pp. 45–46): 8-bit interface, 1-line, 5x8 font, display off, cursor off, blink off, increment mode, no shift, DDRAM filled with `0x20`, CGRAM zeroed. The power-on reset wait lasts 15 ms after `VCC` reaches 4.5 V, or 40 ms after `VCC` reaches 2.7 V when `VCC` stays below 4.5 V. The internal reset holds the busy flag for 10 ms after `VCC` reaches 4.5 V (p. 23), and a command or data write inside that time is dropped and warns `chip.protocol` rule `init_busy`. Below 4.5 V the sheet gives no busy time, so a write inside the 40 ms wait is dropped and warns `init_busy`. A write after the busy time and before the wait elapses runs and warns `init_wait`.
+- 8-bit-to-4-bit init sequence (ADE-207-272 Fig. 24): function-set nibbles `0x3` keep 8-bit mode; `0x2` switches to 4-bit mode, after which two nibbles (high then low) assemble each command or data byte. Any other command sent in 8-bit mode, or a 4-bit function set with `DL = 1`, stops loudly with rule `bus_width`. Selecting one line of the 5x10 font (`N = 0`, `F = 1`) stops loudly with rule `font`. With two lines `F` is don't care (Table 8).
+- With blink on (`B = 1`) and the display on, the character at the cursor switches between all its dots and itself every 409.6 ms at an `fOSC` of 250 kHz (p. 26), which at the 270 kHz the busy times assume is 379.26 ms. The blink counter runs from power-on, so the switches fall on whole multiples of that from the time `VCC` reached 2.7 V.
 - Supported commands: clear display (`0x01`, 1.52 ms busy), return home (`0x02`, 1.52 ms busy), entry mode set (`0x04..0x07`, 37 us), display on/off/cursor/blink (`0x08..0x0F`, 37 us), cursor/display shift (`0x10..0x1F`, 37 us), function set (`0x20..0x3F`, 37 us), set CGRAM address (`0x40..0x7F`, 37 us), set DDRAM address (`0x80..0xFF`, 37 us), and data writes to DDRAM (row 0 at `0x00..0x27`, row 1 at `0x40..0x67`) and CGRAM (64 bytes, 8 custom 5x8 characters). Commands and data writes arriving while busy are dropped as on the chip.
 - Reads with `RW = 1` and `E` high return the busy flag and 7-bit address counter (`RS = 0`) or DDRAM/CGRAM data (`RS = 1`) high nibble first, then low nibble, advancing the address counter on the low nibble.
 - While `V(VCC) - V(GND)` is below 2.7 V, the PCF8574 does not acknowledge, the glass is dark, and power loss clears DDRAM, CGRAM and registers.
@@ -1478,7 +1502,7 @@ A blob the document names that no folder has, a name whose every file hashes to 
 
 ## Ratings
 
-A rating bounds the stress on a part. Every key of a kind's `ratings` object is required, except a resistor's `voltage` and a diode or LED's `reverse_voltage`, which may be left out. Each value is a value object, or `null` for a part that is deliberately unrated. The `ratings` object is required on every kind but `atmega328p`, `esp32s3`, `ssd1306`, `hd44780_i2c`, `ws2812`, `voltage_source`, `capacitor`, `potentiometer` and `switch`, where it is optional.
+A rating bounds the stress on a part. Every key of a kind's `ratings` object is required, except a resistor's `voltage` and a diode or LED's `reverse_voltage`, which may be left out. Each value is a value object, or `null` for a part that is deliberately unrated. The `ratings` object is required on every kind but `atmega328p`, `esp32s3`, `ssd1306`, `hd44780`, `hd44780_i2c`, `ws2812`, `voltage_source`, `capacitor`, `potentiometer` and `switch`, where it is optional.
 
 | Kind | Keys | Checked quantity |
 | --- | --- | --- |
@@ -1495,6 +1519,7 @@ A rating bounds the stress on a part. Every key of a kind's `ratings` object is 
 | `atmega328p` | `pin_current`, `supply_current`, `rail_margin`, `reset_voltage`, `supply_voltage` | each port pin's current, the current through `VCC` and `GND_8`, and each pin's voltage over `GND_8`, each named `#<part>.pin.<pin>` |
 | `esp32s3` | `rail_margin`, `supply_voltage` | `VCC` and each wired GPIO's voltage over `GND`, each named `#<part>.pin.<pin>` |
 | `ssd1306` | `rail_margin`, `supply_voltage` | `VDD`, `SCL`, `SDA` and `RES` voltage over `VSS`, each named `#<part>.pin.<pin>` |
+| `hd44780` | `rail_margin`, `supply_voltage` | `VDD`, `RS`, `RW`, `E` and `D0` to `D7` voltage over `VSS`, each named `#<part>.pin.<pin>` |
 | `hd44780_i2c` | `rail_margin`, `supply_voltage` | `VCC`, `SCL` and `SDA` voltage over `GND`, each named `#<part>.pin.<pin>` |
 | `ws2812` | `rail_margin`, `supply_voltage` | `VCC` and `DIN` voltage over `GND`, each named `#<part>.pin.<pin>` |
 | `hc595` | `pin_current`, `supply_current`, `input_margin`, `output_margin` | each of `QA`–`QH` and `QHp`, the current through `VCC` and `GND`, and each input and output voltage over `GND`, each named `#<part>.pin.<pin>` |

@@ -426,8 +426,15 @@ The message for a dropped transfer is `{part} dropped a transfer that broke rule
 | `scroll` | An `ssd1306` took a scroll command, `26h`, `27h`, `29h`, `2Ah`, `2Fh` or `A3h`, which it does not run. Its message is `{part} did not run a scroll command, breaking rule scroll at {t_ps} ps, the first time`. |
 | `read` | A master read from an `ssd1306`, which has no status byte here. It answers 0xFF bytes. Its message is `{part} answered a read with 0xFF bytes, breaking rule read at {t_ps} ps, the first time`. |
 | `bus_width` | An `hd44780_i2c` received an 8-bit command or a function set selecting the 8-bit bus (`DL = 1`), which the PCF8574 backpack cannot drive. |
-| `font` | An `hd44780_i2c` received a function set selecting the 5x10 font (`F = 1`), which is not supported on a 16x2 glass. |
-| `init_wait` | An `hd44780_i2c` received a command or data write before its HD44780U power-on reset wait elapsed (15 ms after `VCC` reaches 4.5 V, or 40 ms after `VCC` reaches 2.7 V, ADE-207-272 Figs. 23–24). The write is dropped as busy, and its time is the first early `E` falling edge. |
+| `font` | An `hd44780_i2c` or `hd44780` received a function set selecting one line of the 5x10 font (`N = 0`, `F = 1`), which is not supported on a 16x2 glass. With two lines `F` is don't care. |
+| `enable_cycle` | An `hd44780` `E` rose sooner after its last rise than `tcycE`, 500 ns from 4.5 V and 1000 ns below (ADE-207-272 pp. 52, 49). The cycle still runs. |
+| `enable_width` | An `hd44780` `E` high was shorter than `PWEH`, 230 ns from 4.5 V and 450 ns below. The cycle still runs. |
+| `setup` | An `hd44780` `RS` or `RW` moved less than `tAS` before `E` rose, 40 ns or 60 ns, or a write's data less than `tDSW` before `E` fell, 80 ns or 195 ns. The cycle still runs. |
+| `hold` | An `hd44780` `RS` or `RW` moved less than `tAH` after `E` fell or while `E` was high, 10 ns or 20 ns, or a write's data less than `tH` after `E` fell, 10 ns. The cycle still runs. |
+| `contrast` | An `hd44780` had its display on with `VDD - V0` under its `lcd_voltage`, so its glass shows no characters. Its time is the first such moment. |
+| `init_busy` | An `hd44780_i2c` or `hd44780` received a command or data write inside its HD44780U internal reset's busy time, 10 ms after `VCC` reaches 4.5 V (ADE-207-272 p. 23), or the whole 40 ms wait after `VCC` reaches 2.7 V below it (Figs. 23–24). The controller drops the write, and the message says so. Its time is the first such `E` falling edge. |
+| `init_wait` | An `hd44780_i2c` or `hd44780` received a command or data write after its internal reset's busy time and before its power-on reset wait elapsed, 15 ms after `VCC` reaches 4.5 V (Figs. 23–24). The controller runs the write, and the message says it ran early. Its time is the first such `E` falling edge. |
+| `low_supply` | An `hd44780` started a bus cycle, an `E` rise, with `V(VDD) - V(VSS)` under its `operating_voltage`, the module's minimum operating supply, and at or above the controller's 2.7 V. The cycle still runs as the controller runs at that supply. Its time is the first such rise. |
 | `input_level` | A `max7219` driven logic input (`DIN`, `CLK`, or `LOAD`) stayed between its `VIL` (0.8 V) and `VIH` (3.5 V) thresholds longer than a normal edge transition (500 ns) while powered, where the datasheet does not guarantee the logic level (for example, 3.3 V logic driving a 5 V MAX7219 without a level shifter). Undriven high-Z pins during MCU boot are not flagged. |
 
 ## chip.link_miswired

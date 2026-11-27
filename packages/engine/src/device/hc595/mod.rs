@@ -12,7 +12,7 @@ use serde::Deserialize;
 use orbe_model::Device;
 
 use super::Row;
-use crate::active::native::{Hosting, Native, Port};
+use crate::active::native::{Native, Quiet};
 use crate::active::{Chip, Core, Output, Stage};
 use crate::diagnostic::Diagnostic;
 use crate::mna::Node;
@@ -25,9 +25,6 @@ use crate::netlist::{NetId, PartId, Rating, Threshold, Value};
 use crate::output_stage::{OutputStage, WireOutputStage, resolve_output_stage_at};
 use crate::ratings::{Ceiling, PinRatings, PinWindow};
 use crate::watch::{Signal, Watch};
-use crate::world::World;
-
-use orbe_model::{Drive, Time};
 
 const QB: usize = 0;
 const QC: usize = 1;
@@ -77,26 +74,6 @@ const BOUND_INSIDE_V: f64 = 1e-6;
 
 /// No events. The pins are the inputs.
 pub(crate) const ROW: Row = Row::new(&[]);
-
-/// A port with no pins. The device reads its watches itself.
-#[derive(Clone, Copy, Debug)]
-struct Quiet;
-
-impl<D: Device> Port<D> for Quiet {
-    const PINS: usize = 0;
-
-    fn drive(&self, _image: &mut [Drive]) {}
-
-    fn due_at(&self) -> Option<Time> {
-        None
-    }
-
-    fn take_due(&mut self, _dev: &mut Hosting<D>, _world: &World, _at: Time) -> bool {
-        false
-    }
-
-    fn input(&mut self, _dev: &mut Hosting<D>, _world: &World, _at: Time, _levels: &[bool]) {}
-}
 
 pub(crate) fn chip(part: PartId, dev: &Hc595) -> Chip {
     let pins = dev.pins;
