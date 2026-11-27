@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "seed": 0,
+  "analysis": {
+    "op": {}
+  },
+  "ground": "gnd",
+  "nets": [
+    "gnd",
+    "vin",
+    "mid"
+  ],
+  "parts": [
+    {
+      "name": "v1",
+      "kind": "voltage_source",
+      "pins": {
+        "p": "vin",
+        "n": "gnd"
+      },
+      "voltage": {
+        "value": 5.0,
+        "unit": "V"
+      }
+    },
+    {
+      "name": "r1",
+      "kind": "resistor",
+      "pins": {
+        "a": "vin",
+        "b": "mid"
+      },
+      "resistance": {
+        "value": 10.0,
+        "unit": "ohm"
+      },
+      "ratings": {
+        "power": null
+      }
+    },
+    {
+      "name": "l1",
+      "kind": "inductor",
+      "pins": {
+        "a": "mid",
+        "b": "gnd"
+      },
+      "inductance": {
+        "value": 1e-06,
+        "unit": "H"
+      },
+      "series_resistance": {
+        "value": 1.0,
+        "unit": "ohm"
+      }
+    }
+  ]
+}

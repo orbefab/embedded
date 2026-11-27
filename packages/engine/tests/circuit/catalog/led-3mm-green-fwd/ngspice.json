@@ -1,0 +1,18 @@
+{
+  "deck_sha256": "84c97f2cce980df577e1a5b563b825f91a468ddf087bbfcbbb276e2ad8778856",
+  "format": 0,
+  "netlist_sha256": "ab4d8df9a773124841a5fd87f1b93a64c9222c8c8608c51e7f84c5387536b8b1",
+  "ngspice": "ngspice-42",
+  "op": {
+    "#d1.i": 0.0133235584950554,
+    "#d1.v": 2.068817130632664,
+    "#net.gnd": 0.0,
+    "#net.va": 2.068817130632664,
+    "#net.vin": 5.0,
+    "#r1.i": 0.01332355849712425,
+    "#r1.v": 2.931182869367336,
+    "#v1.i": -0.01332355850212426,
+    "#v1.v": 5.0
+  },
+  "options": "temp=25 tnom=25 reltol=1e-9 abstol=1e-15 vntol=1e-12 gmin=1e-12"
+}

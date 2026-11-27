@@ -1,0 +1,82 @@
+{
+  "version": 1,
+  "seed": 0,
+  "analysis": {
+    "op": {}
+  },
+  "ground": "gnd",
+  "nets": [
+    "gnd",
+    "vin",
+    "vz"
+  ],
+  "parts": [
+    {
+      "name": "v1",
+      "kind": "voltage_source",
+      "pins": {
+        "p": "vin",
+        "n": "gnd"
+      },
+      "voltage": {
+        "value": 5.0,
+        "unit": "V"
+      }
+    },
+    {
+      "name": "r1",
+      "kind": "resistor",
+      "pins": {
+        "a": "vin",
+        "b": "vz"
+      },
+      "resistance": {
+        "value": 220.0,
+        "unit": "ohm"
+      },
+      "ratings": {
+        "power": null
+      }
+    },
+    {
+      "name": "dz1",
+      "kind": "zener",
+      "pins": {
+        "anode": "vz",
+        "cathode": "gnd"
+      },
+      "saturation_current": {
+        "value": 2.908000103814407e-13,
+        "unit": "A"
+      },
+      "emission_coefficient": {
+        "value": 1.2314970051462708,
+        "unit": "1"
+      },
+      "series_resistance": {
+        "value": 0.3512998076842114,
+        "unit": "ohm"
+      },
+      "zener_voltage": {
+        "value": 5.1,
+        "unit": "V"
+      },
+      "zener_current": {
+        "value": 0.049,
+        "unit": "A"
+      },
+      "zener_impedance": {
+        "value": 7.0,
+        "unit": "ohm"
+      },
+      "breakdown_resistance": {
+        "value": 4.518344790967284,
+        "unit": "ohm"
+      },
+      "ratings": {
+        "current": null,
+        "power": null
+      }
+    }
+  ]
+}

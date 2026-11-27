@@ -1,0 +1,87 @@
+{
+  "version": 1,
+  "seed": 0,
+  "analysis": {
+    "op": {}
+  },
+  "ground": "gnd",
+  "nets": [
+    "gnd",
+    "vin",
+    "vout"
+  ],
+  "parts": [
+    {
+      "name": "v1",
+      "kind": "voltage_source",
+      "pins": {
+        "p": "vin",
+        "n": "gnd"
+      },
+      "voltage": {
+        "value": 9.5,
+        "unit": "V"
+      }
+    },
+    {
+      "name": "rl",
+      "kind": "resistor",
+      "pins": {
+        "a": "vout",
+        "b": "gnd"
+      },
+      "resistance": {
+        "value": 1.0417,
+        "unit": "ohm"
+      },
+      "ratings": {
+        "power": null
+      }
+    },
+    {
+      "name": "u1",
+      "kind": "linear_regulator",
+      "pins": {
+        "in": "vin",
+        "out": "vout",
+        "gnd": "gnd"
+      },
+      "output_voltage": {
+        "value": 5.0,
+        "unit": "V"
+      },
+      "line_regulation": {
+        "value": 0.00016666666666666666,
+        "unit": "1"
+      },
+      "output_resistance": {
+        "value": 0.006688963210702341,
+        "unit": "ohm"
+      },
+      "dropout_voltage": {
+        "value": 1.999,
+        "unit": "V"
+      },
+      "dropout_resistance": {
+        "value": 0.001,
+        "unit": "ohm"
+      },
+      "current_limit": {
+        "value": 2.4,
+        "unit": "A"
+      },
+      "quiescent_current": {
+        "value": 0.0046,
+        "unit": "A"
+      },
+      "ground_current_ratio": {
+        "value": 0,
+        "unit": "1"
+      },
+      "ratings": {
+        "current": null,
+        "power": null
+      }
+    }
+  ]
+}

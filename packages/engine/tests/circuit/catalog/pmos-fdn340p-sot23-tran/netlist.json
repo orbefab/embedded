@@ -1,0 +1,122 @@
+{
+  "version": 1,
+  "seed": 0,
+  "analysis": {
+    "transient": {
+      "stop_ps": 200000000,
+      "max_step_ps": 2000000,
+      "grid_ps": 2000000
+    }
+  },
+  "ground": "gnd",
+  "nets": [
+    "gnd",
+    "vdd",
+    "vg",
+    "g",
+    "d"
+  ],
+  "parts": [
+    {
+      "name": "vdd",
+      "kind": "voltage_source",
+      "pins": {
+        "p": "vdd",
+        "n": "gnd"
+      },
+      "voltage": {
+        "value": 5.0,
+        "unit": "V"
+      }
+    },
+    {
+      "name": "vg",
+      "kind": "voltage_source",
+      "pins": {
+        "p": "vg",
+        "n": "gnd"
+      },
+      "voltage": {
+        "kind": "pulse",
+        "initial": {
+          "value": 5.0,
+          "unit": "V"
+        },
+        "pulsed": {
+          "value": 0.0,
+          "unit": "V"
+        },
+        "delay_ps": 10000000,
+        "width_ps": 80000000,
+        "period_ps": 400000000
+      }
+    },
+    {
+      "name": "rg",
+      "kind": "resistor",
+      "pins": {
+        "a": "vg",
+        "b": "g"
+      },
+      "resistance": {
+        "value": 100000.0,
+        "unit": "ohm"
+      },
+      "ratings": {
+        "power": null
+      }
+    },
+    {
+      "name": "rd",
+      "kind": "resistor",
+      "pins": {
+        "a": "d",
+        "b": "gnd"
+      },
+      "resistance": {
+        "value": 100.0,
+        "unit": "ohm"
+      },
+      "ratings": {
+        "power": null
+      }
+    },
+    {
+      "name": "m1",
+      "kind": "pmos",
+      "pins": {
+        "drain": "d",
+        "gate": "g",
+        "source": "vdd"
+      },
+      "transconductance_parameter": {
+        "value": 4.579,
+        "unit": "A/V^2"
+      },
+      "threshold_voltage": {
+        "value": 0.8,
+        "unit": "V"
+      },
+      "channel_length_modulation": {
+        "value": 0.0,
+        "unit": "1/V"
+      },
+      "gate_source_capacitance": {
+        "value": 7.23e-10,
+        "unit": "F"
+      },
+      "gate_drain_capacitance": {
+        "value": 5.6e-11,
+        "unit": "F"
+      },
+      "drain_source_capacitance": {
+        "value": 6.5e-11,
+        "unit": "F"
+      },
+      "ratings": {
+        "current": null,
+        "power": null
+      }
+    }
+  ]
+}

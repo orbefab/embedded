@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "seed": 0,
+  "analysis": {
+    "op": {}
+  },
+  "ground": "gnd",
+  "nets": [
+    "gnd",
+    "vin",
+    "mid"
+  ],
+  "parts": [
+    {
+      "name": "v1",
+      "kind": "voltage_source",
+      "pins": {
+        "p": "vin",
+        "n": "gnd"
+      },
+      "voltage": {
+        "value": 5.0,
+        "unit": "V"
+      }
+    },
+    {
+      "name": "rsrc",
+      "kind": "resistor",
+      "pins": {
+        "a": "vin",
+        "b": "mid"
+      },
+      "resistance": {
+        "value": 100.0,
+        "unit": "ohm"
+      },
+      "ratings": {
+        "power": null
+      }
+    },
+    {
+      "name": "r1",
+      "kind": "resistor",
+      "pins": {
+        "a": "mid",
+        "b": "gnd"
+      },
+      "resistance": {
+        "value": 220.0,
+        "unit": "ohm"
+      },
+      "ratings": {
+        "power": null
+      }
+    }
+  ]
+}

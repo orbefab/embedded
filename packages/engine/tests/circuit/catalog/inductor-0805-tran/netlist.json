@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "seed": 0,
+  "analysis": {
+    "transient": {
+      "stop_ps": 5000000,
+      "max_step_ps": 50000,
+      "grid_ps": 50000
+    }
+  },
+  "ground": "gnd",
+  "nets": [
+    "gnd",
+    "vin"
+  ],
+  "parts": [
+    {
+      "name": "v1",
+      "kind": "voltage_source",
+      "pins": {
+        "p": "vin",
+        "n": "gnd"
+      },
+      "voltage": {
+        "kind": "step",
+        "initial": {
+          "value": 0.0,
+          "unit": "V"
+        },
+        "final": {
+          "value": 1.0,
+          "unit": "V"
+        },
+        "at_ps": 500000
+      }
+    },
+    {
+      "name": "l1",
+      "kind": "inductor",
+      "pins": {
+        "a": "vin",
+        "b": "gnd"
+      },
+      "inductance": {
+        "value": 1e-06,
+        "unit": "H"
+      },
+      "series_resistance": {
+        "value": 1.0,
+        "unit": "ohm"
+      }
+    }
+  ]
+}
