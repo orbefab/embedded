@@ -178,6 +178,11 @@ pub fn lit_count(panel: &Panel, pixels: &[u8]) -> usize {
         .count()
 }
 
+/// Whether any pixel of a `kind` panel's glass reads lit, as [`art`] marks it `#`.
+pub fn has_lit(kind: &str, pixels: &[u8]) -> bool {
+    pixels.chunks(RGBA).any(|pixel| lit(kind, pixel))
+}
+
 /// `pixels`, `width` by `height` pixels as [`glass`] returns them, as a PNG file: 8 bits a
 /// channel, red, green, blue and alpha, no filter, in stored deflate blocks, so the bytes depend
 /// on the pixels alone.
@@ -420,7 +425,24 @@ mod tests {
         // The zlib stream's check: every filter byte and pixel byte summed as Adler-32 says.
         let pixels = glass(&oled(), &images[0].1);
         assert_eq!(lit_count(&oled(), &pixels), 1);
+        assert!(has_lit("ssd1306", &pixels));
         assert_eq!(&art(&oled(), &pixels)[..4], "#...");
+    }
+
+    #[test]
+    fn has_lit_follows_each_kind_s_rule() {
+        // Non-LCD kinds count any opaque channel at half scale or above, including dim green/blue.
+        for kind in ["ssd1306", "st77916", "max7219"] {
+            assert!(has_lit(kind, &[0, 128, 0, 255]), "{kind} dim green");
+            assert!(has_lit(kind, &[0, 0, 128, 255]), "{kind} dim blue");
+            assert!(!has_lit(kind, &[127, 127, 127, 255]), "{kind} below half");
+            assert!(!has_lit(kind, &[255, 255, 255, 0]), "{kind} transparent");
+        }
+        // Backlit character LCDs are blue everywhere, so only bright white dots read lit.
+        for kind in ["hd44780", "hd44780_i2c"] {
+            assert!(!has_lit(kind, &[0, 128, 255, 255]), "{kind} backlit blue");
+            assert!(has_lit(kind, &[128, 128, 128, 255]), "{kind} lit dot");
+        }
     }
 
     #[test]

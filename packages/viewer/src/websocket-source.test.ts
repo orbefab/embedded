@@ -92,8 +92,8 @@ describe("websocketSource", () => {
     const source = websocketSource(() => socket as unknown as WebSocket);
     socket.open();
     socket.receive(scene);
-    const a = { width: 1, height: 1, rgba: "AAAA/w==" };
-    const b = { width: 1, height: 1, rgba: "////fw==" };
+    const a = { width: 1, height: 1, rgba: "AAAA/w==", lit: false };
+    const b = { width: 1, height: 1, rgba: "////fw==", lit: false };
     socket.receive({ ...frame(0), screens: [a, a] });
     socket.receive({ ...frame(1), screens: [null, b] });
     socket.receive(frame(2));
