@@ -986,356 +986,63 @@ impl Ratings {
         for gauge in &mut self.chips {
             gauge.read(row, &cores[gauge.active]);
         }
-        let elapsed = |over: bool, over_ps: Option<&mut u64>, last: Option<Time>| {
-            if over && let (Some(last), Some(over_ps)) = (last, over_ps) {
-                *over_ps += at.as_ps() - last.as_ps();
-            }
-        };
-        let back = self.restarted.then_some(self.last).flatten();
         self.decays.known.clear();
-        for watch in &mut self.watches {
-            elapsed(
-                watch.over,
-                watch.excursion.as_mut().and_then(|e| e.over_ps.as_mut()),
-                self.last,
-            );
-            let sample = magnitude(watch, &self.chips, row);
-            let reading = match (&mut watch.heat, self.timing) {
-                (Some(heat), Timing::Run) => {
-                    if let Some(recent) = &mut heat.recent {
-                        recent.take(at, sample, back.is_some());
-                    }
-                    heat.filter
-                        .take_in(at, sample, back.is_some(), &mut self.decays)
-                }
-                _ => sample,
-            };
-            watch.last = sample;
-            let from = back.filter(|_| watch.heat.is_some()).unwrap_or(at);
-            watch.since =
-                exceeds_rounded(sample, watch.limit_rounded).then(|| watch.since.unwrap_or(from));
-            watch.over = exceeds_rounded(reading, watch.limit_rounded);
-            if !watch.over {
-                continue;
-            }
-            match &mut watch.excursion {
-                None => {
-                    watch.excursion = Some(Excursion {
-                        quantity: watch.quantity.clone(),
-                        limit: watch.limit,
-                        peak: reading,
-                        peak_at: at,
-                        first: at,
-                        over_ps: self.timing.over_ps(),
-                        basis: watch.basis,
-                        sample,
-                        held_ps: None,
-                        characterized: watch.characterized,
-                    });
-                }
-                Some(excursion) if reading > excursion.peak => {
-                    excursion.peak = reading;
-                    excursion.peak_at = at;
-                    excursion.sample = sample;
-                }
-                Some(_) => {}
-            }
-        }
-        for window in &mut self.windows {
-            elapsed(
-                window.over,
-                window.excursion.as_mut().and_then(|e| e.over_ps.as_mut()),
-                self.last,
-            );
-            let WindowReading {
-                v,
-                low,
-                high,
-                below,
-                above,
-            } = window.read(row);
-            window.over = below || above;
-            if !window.over {
-                continue;
-            }
-            let past = low
-                .filter(|_| below)
-                .map_or(f64::NEG_INFINITY, |low| low - v)
-                .max(
-                    high.filter(|_| above)
-                        .map_or(f64::NEG_INFINITY, |high| v - high),
-                );
-            let reading = VoltageExcursion {
-                pin: window.pin.clone(),
-                low,
-                high,
-                peak: v,
-                peak_at: at,
-                first: at,
-                over_ps: self.timing.over_ps(),
-                operating: false,
-            };
-            match &mut window.excursion {
-                None => {
-                    window.worst = past;
-                    window.excursion = Some(reading);
-                }
-                Some(excursion) if past > window.worst => {
-                    window.worst = past;
-                    excursion.low = reading.low;
-                    excursion.high = reading.high;
-                    excursion.peak = v;
-                    excursion.peak_at = at;
-                }
-                Some(_) => {}
-            }
-        }
-        for supply in &mut self.supplies {
-            let (v, band) = supply.read(row);
-            match band {
-                SupplyBand::Low => {
-                    if let Some(ep) = &mut supply.episode {
-                        if let (Some(last), Some(over_ps)) = (self.last, &mut ep.over_ps) {
-                            *over_ps += at.as_ps() - last.as_ps();
-                        }
-                        ep.push(at, v, self.restarted);
-                    } else {
-                        let entry = match supply.last_band {
-                            None => SupplyEntry::Start,
-                            Some(SupplyBand::Off) => SupplyEntry::Off,
-                            Some(SupplyBand::On) => SupplyEntry::On,
-                            Some(SupplyBand::Low) => unreachable!("episode is open while Low"),
-                        };
-                        let start = match (self.timing, entry, back) {
-                            (Timing::Run, SupplyEntry::Start, _) if self.last.is_none() => {
-                                Time::ZERO
-                            }
-                            (Timing::Run, _, Some(last)) => last,
-                            _ => at,
-                        };
-                        supply.episode =
-                            Some(SupplyEpisode::start(entry, start, at, v, self.timing));
-                        supply.began += 1;
-                    }
-                }
-                SupplyBand::On | SupplyBand::Off => {
-                    if let Some(mut ep) = supply.episode.take() {
-                        if !self.restarted
-                            && let (Some(last), Some(over_ps)) = (self.last, &mut ep.over_ps)
-                        {
-                            *over_ps += at.as_ps() - last.as_ps();
-                        }
-                        let power_cycle = matches!(
-                            (ep.entry, band),
-                            (SupplyEntry::Off, SupplyBand::On) | (SupplyEntry::On, SupplyBand::Off)
-                        );
-                        if !power_cycle {
-                            supply.merge(ep);
-                            supply.closed += 1;
-                        }
-                    }
-                }
-            }
-            supply.last_band = Some(band);
-        }
-        for limit in &mut self.limits {
-            if limit.clamped_since.is_some()
-                && let Some(last) = self.last
-            {
-                let dt = at.as_ps() - last.as_ps();
-                if let Some(excursion) = &mut limit.excursion {
-                    if let Some(over_ps) = &mut excursion.over_ps {
-                        *over_ps += dt;
-                    }
-                } else if let Some(pending) = &mut limit.pending
-                    && let Some(over_ps) = &mut pending.over_ps
-                {
-                    *over_ps += dt;
-                }
-            }
-            let Clamp {
-                vo,
-                current: i,
-                vout,
-                drop,
-                sag,
-                clamped,
-            } = limit.read(row);
-            if !clamped {
-                limit.clamped_since = None;
-                limit.last_clamped = None;
-                limit.hold.clear();
-                limit.pending = None;
-                if drop < LIMIT_KNEE_FRACTION * vout {
-                    limit.baseline_vo = Some(vo);
-                }
-                continue;
-            }
-            let sample = ClampedSample { at, vo, current: i };
-            let since = *limit.clamped_since.get_or_insert(at);
-            if let Some(prev) = limit.last_clamped.replace(sample) {
-                let high = if sample.vo >= prev.vo { sample } else { prev };
-                while limit
-                    .hold
-                    .back()
-                    .is_some_and(|(_, back)| back.vo <= high.vo)
-                {
-                    limit.hold.pop_back();
-                }
-                limit.hold.push_back((at, high));
-                let cutoff = at.as_ps().saturating_sub(LIMIT_HOLD_PS);
-                while limit
-                    .hold
-                    .front()
-                    .is_some_and(|(to, _)| to.as_ps() <= cutoff)
-                {
-                    limit.hold.pop_front();
-                }
-            }
-            let held = (at.as_ps() - since.as_ps() >= LIMIT_HOLD_PS)
-                .then(|| limit.hold.front().map(|(_, s)| *s))
-                .flatten();
-            if let Some(excursion) = &mut limit.excursion {
-                if let Some(peak) = held
-                    && peak.vo < excursion.voltage
-                {
-                    excursion.voltage = peak.vo;
-                    excursion.current = peak.current;
-                    excursion.peak_at = peak.at;
-                }
-                continue;
-            }
-            let pulled = limit.baseline_vo.is_some_and(|before| before - vo >= sag);
-            let warn = if self.timing == Timing::Point {
-                true
-            } else if let Some(pending) = &mut limit.pending {
-                if pulled {
-                    let since = *pending.pulled_since.get_or_insert(at);
-                    at.as_ps() - since.as_ps() >= LIMIT_HOLD_PS
-                } else {
-                    pending.pulled_since = None;
-                    let dt_ps = at.as_ps() - pending.progress_at.as_ps();
-                    if dt_ps >= STALL_PS {
-                        if vo - pending.progress_vo
-                            >= MIN_CHARGE_RATE * drop * (dt_ps as f64 * 1e-12)
-                        {
-                            pending.progress_vo = vo;
-                            pending.progress_at = at;
-                            false
-                        } else {
-                            true
-                        }
-                    } else {
-                        false
-                    }
-                }
-            } else {
-                limit.pending = Some(PendingLimit {
-                    first: at,
-                    over_ps: self.timing.over_ps(),
-                    pulled_since: pulled.then_some(at),
-                    progress_vo: vo,
-                    progress_at: at,
-                });
-                false
-            };
-            if warn {
-                let (first, over_ps) = match limit.pending.take() {
-                    Some(pending) => (pending.first, pending.over_ps),
-                    None => (at, self.timing.over_ps()),
-                };
-                let peak = held.unwrap_or(sample);
-                limit.excursion = Some(CurrentLimitExcursion {
-                    pin: limit.pin.clone(),
-                    limit: limit.reg.current_limit.si.get(),
-                    target: vout,
-                    voltage: peak.vo,
-                    current: peak.current,
-                    peak_at: peak.at,
-                    first,
-                    over_ps,
-                });
-            }
-        }
-        for drive in &mut self.drives {
-            let volts = row[drive.column].get().abs();
-            let loud = volts >= DRIVE_QUIET_V;
-            let ended = !loud && drive.peak >= DRIVE_QUIET_V;
-            if loud {
-                drive.pulse_from.get_or_insert(self.last.unwrap_or(at));
-                drive.loud_at = Some(at);
-                if volts > drive.peak {
-                    drive.peak = volts;
-                    if exceeds_rounded(volts, drive.max_rounded) {
-                        judge_drive(drive, at, self.timing.over_ps());
-                    }
-                }
-            } else if ended {
-                judge_drive(drive, at, self.timing.over_ps());
-            }
-            // A pulse that ends counts to its last loud sample. The quiet sample after it can
-            // come a whole step later.
-            let through = if loud { Some(at) } else { drive.loud_at };
-            if drive.over
-                && (loud || ended)
-                && let Some(through) = through
-            {
-                if let Some(over_ps) = drive.excursion.as_mut().and_then(|e| e.over_ps.as_mut()) {
-                    *over_ps += through.as_ps().saturating_sub(drive.counted_to.as_ps());
-                }
-                drive.counted_to = drive.counted_to.max(through);
-            }
-            if !loud {
-                drive.peak = 0.0;
-                drive.pulse_from = None;
-                let rested = drive
-                    .loud_at
-                    .is_none_or(|loud_at| at.as_ps() - loud_at.as_ps() > DRIVE_REST_PS);
-                if rested {
-                    drive.over = false;
-                }
-            }
-        }
-        for ceiling in &mut self.supply_ceilings {
-            elapsed(
-                ceiling.over,
-                ceiling.excursion.as_mut().and_then(|e| e.over_ps.as_mut()),
-                self.last,
-            );
-            let v = row[ceiling.vs].get() - row[ceiling.gnd].get();
-            let over_operating = exceeds_rounded(v, ceiling.max_rounded);
-            let over_abs = ceiling
-                .abs_max_rounded
-                .is_some_and(|abs| exceeds_rounded(v, abs));
-            ceiling.over = over_operating && !over_abs;
-            if !ceiling.over {
-                continue;
-            }
-            let past = v - ceiling.max;
-            match &mut ceiling.excursion {
-                None => {
-                    ceiling.worst = past;
-                    ceiling.excursion = Some(VoltageExcursion {
-                        pin: ceiling.pin.clone(),
-                        low: None,
-                        high: Some(ceiling.max),
-                        peak: v,
-                        peak_at: at,
-                        first: at,
-                        over_ps: self.timing.over_ps(),
-                        operating: true,
-                    });
-                }
-                Some(excursion) if past > ceiling.worst => {
-                    ceiling.worst = past;
-                    excursion.peak = v;
-                    excursion.peak_at = at;
-                }
-                Some(_) => {}
-            }
+        let (families, mut step) = self.families_mut(at);
+        for family in families {
+            family.sample(&mut step, row);
         }
         self.last = Some(at);
         self.restarted = false;
+    }
+
+    /// Each family [`Self::sample`] checks on a row, and the step they share. A new field of
+    /// [`Ratings`] does not compile until it is named here and in [`Self::families`].
+    fn families_mut(&mut self, at: Time) -> ([&mut dyn Family; FAMILIES], Step<'_>) {
+        let Ratings {
+            timing,
+            watches,
+            windows,
+            supplies,
+            limits,
+            drives,
+            supply_ceilings,
+            chips,
+            temperatures: _,
+            last,
+            restarted,
+            decays,
+        } = self;
+        let step = Step {
+            at,
+            last: *last,
+            restarted: *restarted,
+            timing: *timing,
+            chips,
+            decays,
+        };
+        (
+            [watches, windows, supplies, limits, drives, supply_ceilings],
+            step,
+        )
+    }
+
+    /// The families of [`Self::families_mut`], to read.
+    fn families(&self) -> [&dyn Family; FAMILIES] {
+        let Ratings {
+            watches,
+            windows,
+            supplies,
+            limits,
+            drives,
+            supply_ceilings,
+            timing: _,
+            chips: _,
+            temperatures: _,
+            last: _,
+            restarted: _,
+            decays: _,
+        } = self;
+        [watches, windows, supplies, limits, drives, supply_ceilings]
     }
 
     /// One `rating.*` diagnostic per quantity that went over, plus one `regulator.current_limit`
@@ -1417,45 +1124,30 @@ impl Ratings {
     /// [`Self::findings`] and each rating [`Self::over_now`], through `probe` when it is after
     /// the last sample: the time, the row there, and the cores whose drive the row was solved
     /// with. A probe is not kept, so the next accepted step samples as though it had not run.
-    /// When [`Self::quiet_after`] says nothing is over before or after the probe, no copy is
-    /// sampled.
     pub(crate) fn now(&self, probe: Option<Sample>) -> Vec<Diagnostic> {
-        let mut probed = None;
-        let mut quiet = false;
-        if let Some((at, row, cores)) = probe
-            && self.last.is_none_or(|last| at > last)
-        {
-            quiet = self.quiet_after(at, row, cores);
-            // A debug build samples the copy anyway, to check that it finds nothing.
-            if quiet && !cfg!(debug_assertions) {
-                return Vec::new();
-            }
-            let mut ratings = self.clone();
-            ratings.sample(at, row, cores);
-            probed = Some(ratings);
+        match self.through(probe) {
+            Through::Last => self.found(),
+            Through::Probed(ratings) => ratings.found(),
+            Through::Quiet => Vec::new(),
         }
-        let ratings = probed.as_ref().unwrap_or(self);
-        let mut found = ratings.findings();
-        found.extend(ratings.over_now());
-        debug_assert!(!quiet || found.is_empty(), "a quiet probe found {found:?}");
+    }
+
+    /// Each supply pin's [`SupplyMark`], through `probe` as [`Self::now`] reads it.
+    pub(crate) fn supply_marks(&self, probe: Option<Sample>) -> Vec<SupplyMark> {
+        match self.through(probe) {
+            Through::Last | Through::Quiet => self.marks(),
+            Through::Probed(ratings) => ratings.marks(),
+        }
+    }
+
+    fn found(&self) -> Vec<Diagnostic> {
+        let mut found = self.findings();
+        found.extend(self.over_now());
         found
     }
 
-    /// Each supply pin's [`SupplyMark`], through `probe` as [`Self::now`] reads it. A quiet
-    /// probe would begin no episode, so it is not sampled.
-    pub(crate) fn supply_marks(&self, probe: Option<Sample>) -> Vec<SupplyMark> {
-        let probed = probe
-            .filter(|&(at, row, cores)| {
-                self.last.is_none_or(|last| at > last) && !self.quiet_after(at, row, cores)
-            })
-            .map(|(at, row, cores)| {
-                let mut ratings = self.clone();
-                ratings.sample(at, row, cores);
-                ratings
-            });
-        let ratings = probed.as_ref().unwrap_or(self);
-        ratings
-            .supplies
+    fn marks(&self) -> Vec<SupplyMark> {
+        self.supplies
             .iter()
             .map(|supply| SupplyMark {
                 pin: supply.pin.clone(),
@@ -1466,75 +1158,571 @@ impl Ratings {
             .collect()
     }
 
-    /// Nothing is over now, and a sample of `row` at `at` would leave nothing over: no watch,
-    /// window, regulator or drive has an excursion, none would start one, and no sustained
-    /// rating would be over now. `false` when a sample might change that, such as a clamped
-    /// regulator or a drive pulse that ends. It reads what [`Self::sample`] reads the same way,
-    /// and changes nothing.
-    fn quiet_after(&self, at: Time, row: &[Finite], cores: &[active::Core]) -> bool {
-        if self.watches.iter().any(|w| w.excursion.is_some())
-            || self.windows.iter().any(|w| w.excursion.is_some())
-            || self
-                .supplies
-                .iter()
-                .any(|s| s.excursion.is_some() || s.episode.is_some())
-            || self.limits.iter().any(|l| l.excursion.is_some())
-            || self.drives.iter().any(|d| d.excursion.is_some())
-            || self.supply_ceilings.iter().any(|c| c.excursion.is_some())
-        {
-            return false;
+    /// The ratings through `probe`. A probe that is not after the last sample reads them as
+    /// they are. When [`Self::quiet_after`] says a sample there would find nothing, nothing is
+    /// copied. Otherwise a copy samples it.
+    fn through(&self, probe: Option<Sample>) -> Through {
+        let Some((at, row, cores)) =
+            probe.filter(|&(at, ..)| self.last.is_none_or(|last| at > last))
+        else {
+            return Through::Last;
+        };
+        let quiet = self.quiet_after(at, row, cores);
+        if quiet && !cfg!(debug_assertions) {
+            return Through::Quiet;
         }
+        let mut ratings = self.clone();
+        ratings.sample(at, row, cores);
+        if !quiet {
+            return Through::Probed(Box::new(ratings));
+        }
+        // Only a debug build gets here. It samples the copy anyway, to check the quiet answer.
+        let found = ratings.found();
+        assert!(found.is_empty(), "a quiet probe found {found:?}");
+        assert_eq!(
+            ratings.marks(),
+            self.marks(),
+            "a quiet probe moved a supply mark"
+        );
+        Through::Quiet
+    }
+
+    /// Nothing is over now, and a sample of `row` at `at` would leave nothing over and open no
+    /// supply episode: each family is [`Family::quiet`] there. It changes nothing.
+    fn quiet_after(&self, at: Time, row: &[Finite], cores: &[active::Core]) -> bool {
         let mut chips = self.chips.clone();
         for gauge in &mut chips {
             gauge.read(row, &cores[gauge.active]);
         }
-        let back = self.restarted.then_some(self.last).flatten();
-        let mut decays = Decays::default();
-        let watches = self.watches.iter().all(|watch| {
-            let sample = magnitude(watch, &chips, row);
-            let reading = match (&watch.heat, self.timing) {
-                (Some(heat), Timing::Run) => {
-                    heat.filter
-                        .clone()
-                        .take_in(at, sample, back.is_some(), &mut decays)
+        let mut step = Step {
+            at,
+            last: self.last,
+            restarted: self.restarted,
+            timing: self.timing,
+            chips: &chips,
+            decays: &mut Decays::default(),
+        };
+        self.families()
+            .into_iter()
+            .all(|family| family.quiet(&mut step, row))
+    }
+}
+
+/// What [`Ratings::through`] found at a probe.
+enum Through {
+    /// The probe is not after the last sample, so the ratings read as they are.
+    Last,
+    /// A copy that sampled the probe.
+    Probed(Box<Ratings>),
+    /// A sample at the probe finds nothing over and moves no supply mark.
+    Quiet,
+}
+
+/// How many families [`Ratings::families`] lists.
+const FAMILIES: usize = 6;
+
+/// What one sample's families read besides the row.
+struct Step<'a> {
+    at: Time,
+    /// The sample before, if any.
+    last: Option<Time>,
+    /// The sample before restarted at an edge, so this one holds back to it.
+    restarted: bool,
+    timing: Timing,
+    /// Each rated chip's currents in the row.
+    chips: &'a [Gauge],
+    decays: &'a mut Decays,
+}
+
+impl Step<'_> {
+    /// The sample before when it restarted, which this one holds back to.
+    fn back(&self) -> Option<Time> {
+        self.restarted.then_some(self.last).flatten()
+    }
+
+    /// Adds the time since the sample before to `over_ps` when that sample was `over`.
+    fn elapsed(&self, over: bool, over_ps: Option<&mut u64>) {
+        if over && let (Some(last), Some(over_ps)) = (self.last, over_ps) {
+            *over_ps += self.at.as_ps() - last.as_ps();
+        }
+    }
+}
+
+/// One rated thing a sample checks on its row.
+trait Rated {
+    fn sample(&mut self, step: &mut Step, row: &[Finite]);
+
+    /// It has nothing to report and no supply episode open, and a sample of `row` would leave
+    /// it so. It reads `row` through the same method [`Self::sample`] reads it with, and
+    /// changes nothing.
+    fn quiet(&self, step: &mut Step, row: &[Finite]) -> bool;
+}
+
+/// Every rated thing of one kind.
+trait Family {
+    fn sample(&mut self, step: &mut Step, row: &[Finite]);
+    fn quiet(&self, step: &mut Step, row: &[Finite]) -> bool;
+    #[cfg(test)]
+    fn len(&self) -> usize;
+}
+
+impl<T: Rated> Family for Vec<T> {
+    fn sample(&mut self, step: &mut Step, row: &[Finite]) {
+        for rated in self {
+            rated.sample(step, row);
+        }
+    }
+
+    fn quiet(&self, step: &mut Step, row: &[Finite]) -> bool {
+        self.iter().all(|rated| rated.quiet(step, row))
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        Vec::len(self)
+    }
+}
+
+/// What a watch reads in one row.
+struct WatchReading {
+    /// The row's magnitude.
+    sample: f64,
+    /// A sustained rating's filter after taking it, in a run.
+    filter: Option<Filter>,
+    /// What the rating checks: the filter's reading, or else the sample.
+    reading: f64,
+    /// `reading` is over the rating.
+    over: bool,
+    /// `sample` is over the rating.
+    sample_over: bool,
+}
+
+impl Watch {
+    fn read(&self, step: &mut Step, row: &[Finite]) -> WatchReading {
+        let sample = magnitude(self, step.chips, row);
+        let filter = match (&self.heat, step.timing) {
+            (Some(heat), Timing::Run) => {
+                let mut filter = heat.filter.clone();
+                filter.take_in(step.at, sample, step.back().is_some(), step.decays);
+                Some(filter)
+            }
+            _ => None,
+        };
+        let reading = filter.as_ref().map_or(sample, Filter::reading);
+        WatchReading {
+            sample,
+            filter,
+            reading,
+            over: exceeds_rounded(reading, self.limit_rounded),
+            sample_over: exceeds_rounded(sample, self.limit_rounded),
+        }
+    }
+}
+
+impl Rated for Watch {
+    fn sample(&mut self, step: &mut Step, row: &[Finite]) {
+        step.elapsed(
+            self.over,
+            self.excursion.as_mut().and_then(|e| e.over_ps.as_mut()),
+        );
+        let WatchReading {
+            sample,
+            filter,
+            reading,
+            over,
+            sample_over,
+        } = self.read(step, row);
+        if let (Some(heat), Some(filter)) = (&mut self.heat, filter) {
+            if let Some(recent) = &mut heat.recent {
+                recent.take(step.at, sample, step.back().is_some());
+            }
+            heat.filter = filter;
+        }
+        self.last = sample;
+        let from = step
+            .back()
+            .filter(|_| self.heat.is_some())
+            .unwrap_or(step.at);
+        self.since = sample_over.then(|| self.since.unwrap_or(from));
+        self.over = over;
+        if !over {
+            return;
+        }
+        match &mut self.excursion {
+            None => {
+                self.excursion = Some(Excursion {
+                    quantity: self.quantity.clone(),
+                    limit: self.limit,
+                    peak: reading,
+                    peak_at: step.at,
+                    first: step.at,
+                    over_ps: step.timing.over_ps(),
+                    basis: self.basis,
+                    sample,
+                    held_ps: None,
+                    characterized: self.characterized,
+                });
+            }
+            Some(excursion) if reading > excursion.peak => {
+                excursion.peak = reading;
+                excursion.peak_at = step.at;
+                excursion.sample = sample;
+            }
+            Some(_) => {}
+        }
+    }
+
+    /// A sample over the rating is not quiet on a watch with an over-now average, which may be
+    /// over too, [`Ratings::over_now`].
+    fn quiet(&self, step: &mut Step, row: &[Finite]) -> bool {
+        if self.excursion.is_some() {
+            return false;
+        }
+        let reading = self.read(step, row);
+        let early = self.heat.as_ref().is_some_and(|heat| heat.recent.is_some());
+        !reading.over && !(early && reading.sample_over)
+    }
+}
+
+impl Rated for Window {
+    fn sample(&mut self, step: &mut Step, row: &[Finite]) {
+        step.elapsed(
+            self.over,
+            self.excursion.as_mut().and_then(|e| e.over_ps.as_mut()),
+        );
+        let reading = self.read(row);
+        self.over = reading.over();
+        if !self.over {
+            return;
+        }
+        let WindowReading {
+            v,
+            low,
+            high,
+            below,
+            above,
+        } = reading;
+        let past = low
+            .filter(|_| below)
+            .map_or(f64::NEG_INFINITY, |low| low - v)
+            .max(
+                high.filter(|_| above)
+                    .map_or(f64::NEG_INFINITY, |high| v - high),
+            );
+        let reading = VoltageExcursion {
+            pin: self.pin.clone(),
+            low,
+            high,
+            peak: v,
+            peak_at: step.at,
+            first: step.at,
+            over_ps: step.timing.over_ps(),
+            operating: false,
+        };
+        match &mut self.excursion {
+            None => {
+                self.worst = past;
+                self.excursion = Some(reading);
+            }
+            Some(excursion) if past > self.worst => {
+                self.worst = past;
+                excursion.low = reading.low;
+                excursion.high = reading.high;
+                excursion.peak = v;
+                excursion.peak_at = step.at;
+            }
+            Some(_) => {}
+        }
+    }
+
+    fn quiet(&self, _: &mut Step, row: &[Finite]) -> bool {
+        self.excursion.is_none() && !self.read(row).over()
+    }
+}
+
+impl Rated for SupplyWatch {
+    fn sample(&mut self, step: &mut Step, row: &[Finite]) {
+        let (v, band) = self.read(row);
+        match band {
+            SupplyBand::Low => {
+                if let Some(ep) = &mut self.episode {
+                    if let (Some(last), Some(over_ps)) = (step.last, &mut ep.over_ps) {
+                        *over_ps += step.at.as_ps() - last.as_ps();
+                    }
+                    ep.push(step.at, v, step.restarted);
+                } else {
+                    let entry = match self.last_band {
+                        None => SupplyEntry::Start,
+                        Some(SupplyBand::Off) => SupplyEntry::Off,
+                        Some(SupplyBand::On) => SupplyEntry::On,
+                        Some(SupplyBand::Low) => unreachable!("episode is open while Low"),
+                    };
+                    let start = match (step.timing, entry, step.back()) {
+                        (Timing::Run, SupplyEntry::Start, _) if step.last.is_none() => Time::ZERO,
+                        (Timing::Run, _, Some(last)) => last,
+                        _ => step.at,
+                    };
+                    self.episode =
+                        Some(SupplyEpisode::start(entry, start, step.at, v, step.timing));
+                    self.began += 1;
                 }
-                _ => sample,
-            };
-            let over_now = watch
-                .heat
-                .as_ref()
-                .is_some_and(|heat| heat.recent.is_some())
-                && exceeds_rounded(sample, watch.limit_rounded);
-            !exceeds_rounded(reading, watch.limit_rounded) && !over_now
-        });
-        let windows = self.windows.iter().all(|window| {
-            let reading = window.read(row);
-            !reading.below && !reading.above
-        });
-        let supplies = self
-            .supplies
-            .iter()
-            .all(|supply| supply.read(row).1 != SupplyBand::Low);
-        let limits = self.limits.iter().all(|limit| !limit.read(row).clamped);
-        let drives = self.drives.iter().all(|drive| {
-            let volts = row[drive.column].get().abs();
-            let loud = volts >= DRIVE_QUIET_V;
-            let judged = if loud {
-                volts > drive.peak && exceeds_rounded(volts, drive.max_rounded)
+            }
+            SupplyBand::On | SupplyBand::Off => {
+                if let Some(mut ep) = self.episode.take() {
+                    if !step.restarted
+                        && let (Some(last), Some(over_ps)) = (step.last, &mut ep.over_ps)
+                    {
+                        *over_ps += step.at.as_ps() - last.as_ps();
+                    }
+                    let power_cycle = matches!(
+                        (ep.entry, band),
+                        (SupplyEntry::Off, SupplyBand::On) | (SupplyEntry::On, SupplyBand::Off)
+                    );
+                    if !power_cycle {
+                        self.merge(ep);
+                        self.closed += 1;
+                    }
+                }
+            }
+        }
+        self.last_band = Some(band);
+    }
+
+    fn quiet(&self, _: &mut Step, row: &[Finite]) -> bool {
+        self.excursion.is_none() && self.episode.is_none() && self.read(row).1 != SupplyBand::Low
+    }
+}
+
+impl Rated for RegulatorLimit {
+    fn sample(&mut self, step: &mut Step, row: &[Finite]) {
+        let at = step.at;
+        if self.clamped_since.is_some()
+            && let Some(last) = step.last
+        {
+            let dt = at.as_ps() - last.as_ps();
+            if let Some(excursion) = &mut self.excursion {
+                if let Some(over_ps) = &mut excursion.over_ps {
+                    *over_ps += dt;
+                }
+            } else if let Some(pending) = &mut self.pending
+                && let Some(over_ps) = &mut pending.over_ps
+            {
+                *over_ps += dt;
+            }
+        }
+        let Clamp {
+            vo,
+            current: i,
+            vout,
+            drop,
+            sag,
+            clamped,
+        } = self.read(row);
+        if !clamped {
+            self.clamped_since = None;
+            self.last_clamped = None;
+            self.hold.clear();
+            self.pending = None;
+            if drop < LIMIT_KNEE_FRACTION * vout {
+                self.baseline_vo = Some(vo);
+            }
+            return;
+        }
+        let sample = ClampedSample { at, vo, current: i };
+        let since = *self.clamped_since.get_or_insert(at);
+        if let Some(prev) = self.last_clamped.replace(sample) {
+            let high = if sample.vo >= prev.vo { sample } else { prev };
+            while self.hold.back().is_some_and(|(_, back)| back.vo <= high.vo) {
+                self.hold.pop_back();
+            }
+            self.hold.push_back((at, high));
+            let cutoff = at.as_ps().saturating_sub(LIMIT_HOLD_PS);
+            while self
+                .hold
+                .front()
+                .is_some_and(|(to, _)| to.as_ps() <= cutoff)
+            {
+                self.hold.pop_front();
+            }
+        }
+        let held = (at.as_ps() - since.as_ps() >= LIMIT_HOLD_PS)
+            .then(|| self.hold.front().map(|(_, s)| *s))
+            .flatten();
+        if let Some(excursion) = &mut self.excursion {
+            if let Some(peak) = held
+                && peak.vo < excursion.voltage
+            {
+                excursion.voltage = peak.vo;
+                excursion.current = peak.current;
+                excursion.peak_at = peak.at;
+            }
+            return;
+        }
+        let pulled = self.baseline_vo.is_some_and(|before| before - vo >= sag);
+        let warn = if step.timing == Timing::Point {
+            true
+        } else if let Some(pending) = &mut self.pending {
+            if pulled {
+                let since = *pending.pulled_since.get_or_insert(at);
+                at.as_ps() - since.as_ps() >= LIMIT_HOLD_PS
             } else {
-                drive.peak >= DRIVE_QUIET_V
+                pending.pulled_since = None;
+                let dt_ps = at.as_ps() - pending.progress_at.as_ps();
+                if dt_ps >= STALL_PS {
+                    if vo - pending.progress_vo >= MIN_CHARGE_RATE * drop * (dt_ps as f64 * 1e-12) {
+                        pending.progress_vo = vo;
+                        pending.progress_at = at;
+                        false
+                    } else {
+                        true
+                    }
+                } else {
+                    false
+                }
+            }
+        } else {
+            self.pending = Some(PendingLimit {
+                first: at,
+                over_ps: step.timing.over_ps(),
+                pulled_since: pulled.then_some(at),
+                progress_vo: vo,
+                progress_at: at,
+            });
+            false
+        };
+        if warn {
+            let (first, over_ps) = match self.pending.take() {
+                Some(pending) => (pending.first, pending.over_ps),
+                None => (at, step.timing.over_ps()),
             };
-            !judged
-        });
-        let ceilings = self.supply_ceilings.iter().all(|ceiling| {
-            let v = row[ceiling.vs].get() - row[ceiling.gnd].get();
-            let over_operating = exceeds_rounded(v, ceiling.max_rounded);
-            let over_abs = ceiling
-                .abs_max_rounded
-                .is_some_and(|abs| exceeds_rounded(v, abs));
-            !(over_operating && !over_abs)
-        });
-        watches && windows && supplies && limits && drives && ceilings
+            let peak = held.unwrap_or(sample);
+            self.excursion = Some(CurrentLimitExcursion {
+                pin: self.pin.clone(),
+                limit: self.reg.current_limit.si.get(),
+                target: vout,
+                voltage: peak.vo,
+                current: peak.current,
+                peak_at: peak.at,
+                first,
+                over_ps,
+            });
+        }
+    }
+
+    /// A clamped regulator is not quiet even before it warns: whether it ever does depends on
+    /// the samples after.
+    fn quiet(&self, _: &mut Step, row: &[Finite]) -> bool {
+        self.excursion.is_none() && !self.read(row).clamped
+    }
+}
+
+impl CoilDrive {
+    /// Whether a sample at `volts` judges the pulse: a peak that rises past the window's top, or
+    /// a quiet sample that ends the pulse.
+    fn judges(&self, volts: f64) -> bool {
+        if volts >= DRIVE_QUIET_V {
+            volts > self.peak && exceeds_rounded(volts, self.max_rounded)
+        } else {
+            self.peak >= DRIVE_QUIET_V
+        }
+    }
+}
+
+impl Rated for CoilDrive {
+    fn sample(&mut self, step: &mut Step, row: &[Finite]) {
+        let at = step.at;
+        let volts = row[self.column].get().abs();
+        let loud = volts >= DRIVE_QUIET_V;
+        let judges = self.judges(volts);
+        // A quiet sample judges exactly when it ends a pulse.
+        let ended = !loud && judges;
+        if loud {
+            self.pulse_from.get_or_insert(step.last.unwrap_or(at));
+            self.loud_at = Some(at);
+            self.peak = self.peak.max(volts);
+        }
+        if judges {
+            judge_drive(self, at, step.timing.over_ps());
+        }
+        // A pulse that ends counts to its last loud sample. The quiet sample after it can
+        // come a whole step later.
+        let through = if loud { Some(at) } else { self.loud_at };
+        if self.over
+            && (loud || ended)
+            && let Some(through) = through
+        {
+            if let Some(over_ps) = self.excursion.as_mut().and_then(|e| e.over_ps.as_mut()) {
+                *over_ps += through.as_ps().saturating_sub(self.counted_to.as_ps());
+            }
+            self.counted_to = self.counted_to.max(through);
+        }
+        if !loud {
+            self.peak = 0.0;
+            self.pulse_from = None;
+            let rested = self
+                .loud_at
+                .is_none_or(|loud_at| at.as_ps() - loud_at.as_ps() > DRIVE_REST_PS);
+            if rested {
+                self.over = false;
+            }
+        }
+    }
+
+    fn quiet(&self, _: &mut Step, row: &[Finite]) -> bool {
+        self.excursion.is_none() && !self.judges(row[self.column].get().abs())
+    }
+}
+
+impl SupplyCeiling {
+    /// The supply over ground in `row`, and whether it is over the operating ceiling but not
+    /// past the absolute maximum, where the window warns instead.
+    fn read(&self, row: &[Finite]) -> (f64, bool) {
+        let v = row[self.vs].get() - row[self.gnd].get();
+        let over_operating = exceeds_rounded(v, self.max_rounded);
+        let over_abs = self
+            .abs_max_rounded
+            .is_some_and(|abs| exceeds_rounded(v, abs));
+        (v, over_operating && !over_abs)
+    }
+}
+
+impl Rated for SupplyCeiling {
+    fn sample(&mut self, step: &mut Step, row: &[Finite]) {
+        step.elapsed(
+            self.over,
+            self.excursion.as_mut().and_then(|e| e.over_ps.as_mut()),
+        );
+        let (v, over) = self.read(row);
+        self.over = over;
+        if !over {
+            return;
+        }
+        let past = v - self.max;
+        match &mut self.excursion {
+            None => {
+                self.worst = past;
+                self.excursion = Some(VoltageExcursion {
+                    pin: self.pin.clone(),
+                    low: None,
+                    high: Some(self.max),
+                    peak: v,
+                    peak_at: step.at,
+                    first: step.at,
+                    over_ps: step.timing.over_ps(),
+                    operating: true,
+                });
+            }
+            Some(excursion) if past > self.worst => {
+                self.worst = past;
+                excursion.peak = v;
+                excursion.peak_at = step.at;
+            }
+            Some(_) => {}
+        }
+    }
+
+    fn quiet(&self, _: &mut Step, row: &[Finite]) -> bool {
+        self.excursion.is_none() && !self.read(row).1
     }
 }
 
@@ -1771,6 +1959,12 @@ struct WindowReading {
     high: Option<f64>,
     below: bool,
     above: bool,
+}
+
+impl WindowReading {
+    fn over(&self) -> bool {
+        self.below || self.above
+    }
 }
 
 impl Window {
@@ -2956,5 +3150,192 @@ mod tests {
             serde_json::to_value(&found[0]).unwrap()["message"],
             "#u1.pin.in reaches -0.301 V over the chip's ground, outside its -0.3 V to 3.6 V rating"
         );
+    }
+
+    /// A part in every family: a diode's peak current and a resistor's sustained power are
+    /// watches, that resistor's maximum voltage is a window, then a sensor's supply minimum, a
+    /// regulator's current limit, a coil's operating drive, and the sensor's operating ceiling.
+    fn every_family() -> (Ratings, Columns) {
+        let netlist = crate::netlist::parse(
+            br#"{
+          "version": 1,
+          "seed": 0,
+          "analysis": { "op": {} },
+          "ground": "gnd",
+          "nets": ["gnd", "a", "c", "vin", "vout", "vs", "sense"],
+          "world": { "temperature": { "value": 25.0, "unit": "degC" } },
+          "parts": [
+            {
+              "name": "d1",
+              "kind": "diode",
+              "pins": { "anode": "a", "cathode": "gnd" },
+              "saturation_current": { "value": 1e-14, "unit": "A" },
+              "emission_coefficient": { "value": 1.0, "unit": "1" },
+              "series_resistance": { "value": 1.0, "unit": "ohm" },
+              "ratings": { "current": { "value": 0.03, "unit": "A" }, "power": null }
+            },
+            {
+              "name": "r1",
+              "kind": "resistor",
+              "pins": { "a": "a", "b": "gnd" },
+              "resistance": { "value": 10.0, "unit": "ohm" },
+              "ratings": {
+                "power": { "value": 0.25, "unit": "W" },
+                "voltage": { "value": 10.0, "unit": "V" }
+              }
+            },
+            {
+              "name": "r2",
+              "kind": "resistor",
+              "pins": { "a": "c", "b": "gnd" },
+              "resistance": { "value": 42.0, "unit": "ohm" },
+              "ratings": { "power": null, "voltage": {
+                "min": { "value": 3.0, "unit": "V" },
+                "max": { "value": 5.0, "unit": "V" } } }
+            },
+            {
+              "name": "u1",
+              "kind": "linear_regulator",
+              "pins": { "in": "vin", "out": "vout", "gnd": "gnd" },
+              "output_voltage": { "value": 3.3, "unit": "V" },
+              "output_resistance": { "value": 0.1, "unit": "ohm" },
+              "dropout_voltage": { "value": 0.2, "unit": "V" },
+              "dropout_resistance": { "value": 1.0, "unit": "ohm" },
+              "current_limit": { "value": 1.0, "unit": "A" },
+              "quiescent_current": { "value": 1e-4, "unit": "A" },
+              "ground_current_ratio": { "value": 0.0, "unit": "1" },
+              "line_regulation": { "value": 0.0, "unit": "1" },
+              "ratings": { "current": null, "power": null }
+            },
+            {
+              "name": "s1",
+              "kind": "analog_temp_sensor",
+              "pins": { "vs": "vs", "vout": "sense", "gnd": "gnd" },
+              "output_voltage": { "value": 0.75, "unit": "V" },
+              "output_resistance": { "value": 60.0, "unit": "ohm" },
+              "quiescent_current": { "value": 5e-5, "unit": "A" },
+              "ratings": {
+                "supply_min": { "value": 2.7, "unit": "V" },
+                "supply_max": { "value": 5.5, "unit": "V" },
+                "supply_voltage": { "value": 7.0, "unit": "V" }
+              }
+            }
+          ]
+        }"#,
+        )
+        .unwrap();
+        let columns = Columns::new(&netlist);
+        (Ratings::new(&netlist, &[], &columns, Timing::Run), columns)
+    }
+
+    /// A row with each named column set and every other column 0, which is quiet in every
+    /// family.
+    fn row_of(columns: &Columns, set: &[(&str, f64)]) -> Vec<Finite> {
+        let mut row = vec![Finite::new(0.0).unwrap(); columns.refs().len()];
+        for &(name, value) in set {
+            row[columns.index(&name.parse().unwrap()).unwrap()] = Finite::new(value).unwrap();
+        }
+        row
+    }
+
+    /// Takes `rows` 1 us apart. Before each, a probe of it must read as a copy that samples it:
+    /// the same warnings from `now` and the same supply marks. Returns each probe's warnings.
+    fn probe_each(ratings: &mut Ratings, rows: &[Vec<Finite>]) -> Vec<Vec<Diagnostic>> {
+        let mut found = Vec::new();
+        for (k, row) in rows.iter().enumerate() {
+            let at = Time::from_ps((k as u64 + 1) * 1_000_000);
+            let mut copy = ratings.clone();
+            copy.sample(at, row, &[]);
+            let probe = Some((at, row.as_slice(), &[][..]));
+            let now = ratings.now(probe);
+            assert_eq!(now, copy.found(), "warnings at row {k}");
+            assert_eq!(
+                ratings.supply_marks(probe),
+                copy.marks(),
+                "marks at row {k}"
+            );
+            ratings.sample(at, row, &[]);
+            found.push(now);
+        }
+        found
+    }
+
+    /// In every family, a live probe reads as a sample: while all is quiet, when the family goes
+    /// over, and as it recovers. A release build answers a quiet probe without sampling, so a
+    /// family the quiet check skipped would lose its warning here, and a debug build fails its
+    /// own check of the quiet answer.
+    #[test]
+    fn a_probe_reads_as_a_sample_in_every_family() {
+        let (ratings, columns) = every_family();
+        for (k, family) in ratings.families().iter().enumerate() {
+            assert!(family.len() > 0, "family {k} has no part here");
+        }
+        let row = |set: &[(&str, f64)]| row_of(&columns, set);
+        let idle = row(&[]);
+        let held = [("#net.vin", 5.0), ("#net.vout", 3.3), ("#u1.iout", -0.01)];
+        let clamped = [("#net.vin", 5.0), ("#net.vout", 1.0), ("#u1.iout", -2.0)];
+        // Each family's index in `families`, its rows, and the ref its warning names.
+        let scenarios: [(usize, Vec<Vec<Finite>>, &str); 7] = [
+            (0, vec![row(&[("#d1.i", 0.05)]), idle.clone()], "#d1.i"),
+            (
+                0,
+                vec![row(&[("#r1.p", 1.0)]), row(&[("#r1.p", 1.0)]), idle.clone()],
+                "#r1.p",
+            ),
+            (1, vec![row(&[("#net.a", 20.0)]), idle.clone()], "#r1.v"),
+            (
+                2,
+                vec![
+                    row(&[("#net.vs", 5.0)]),
+                    row(&[("#net.vs", 2.0)]),
+                    row(&[("#net.vs", 2.0)]),
+                    row(&[("#net.vs", 5.0)]),
+                ],
+                "#s1.pin.vs",
+            ),
+            (
+                3,
+                vec![
+                    row(&held),
+                    row(&clamped),
+                    row(&clamped),
+                    row(&clamped),
+                    row(&held),
+                ],
+                "#u1.pin.out",
+            ),
+            (
+                4,
+                vec![row(&[("#r2.v", 6.0)]), idle.clone(), idle.clone()],
+                "#r2.v",
+            ),
+            (
+                5,
+                vec![row(&[("#net.vs", 6.0)]), idle.clone()],
+                "#s1.pin.vs",
+            ),
+        ];
+        let covered: std::collections::BTreeSet<usize> =
+            scenarios.iter().map(|(family, ..)| *family).collect();
+        assert_eq!(covered, (0..FAMILIES).collect(), "a family has no scenario");
+        for (family, rows, named) in scenarios {
+            let (mut ratings, _) = every_family();
+            let mut rows = rows;
+            rows.insert(0, idle.clone());
+            rows.push(idle.clone());
+            let found = probe_each(&mut ratings, &rows);
+            assert!(
+                found[0].is_empty(),
+                "family {family} starts quiet: {:?}",
+                found[0]
+            );
+            assert!(
+                found
+                    .iter()
+                    .flatten()
+                    .any(|d| d.refs().iter().any(|r| r.to_string() == named)),
+                "family {family} names {named}: {found:?}"
+            );
+        }
     }
 }
