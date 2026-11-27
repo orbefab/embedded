@@ -76,6 +76,11 @@
       "unit": "V",
       "source": { "closed_form": { "note": "A to K across the lcd1602-backlight fit at 2 mA, the current that part reads lit" } },
     },
+    "operating_voltage": {
+      "value": 4.7,
+      "unit": "V",
+      "source": { "datasheet": { "doc": "Vishay LCD-016N002B, Document Number 37295", "at": "p. 1, Electrical Characteristics, Input Voltage VDD at VDD = + 5 V, 4.7 V minimum (5.0 V typical, 5.3 V maximum), the lowest supply the module is specified to run at", "basis": "min" } },
+    },
     "draw": {
       "logic_current": {
         "value": 0.00035,
@@ -137,6 +142,10 @@
     {
       "what": "a busy flag held through a read",
       "why": "A read drives the busy flag and address as they stand tDDR after E rises, and holds them until E falls. The real busy flag can clear while E stays high.",
+    },
+    {
+      "what": "oscillator tolerance",
+      "why": "The controller runs at its typical 270 kHz. The sheet gives 190 to 350 kHz with Rf = 91 kohm at 5 V (p. 52), and the busy times and the blink scale with it. The blinking character switches every 379.3 ms, the sheet's 409.6 ms at 250 kHz (p. 26) at 270 kHz, on multiples of that from power-on.",
     },
     {
       "what": "5x10 font",

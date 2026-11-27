@@ -215,8 +215,8 @@ pub enum ProtocolRule {
     BusWidth,
     /// A 5×10 font selection on a 5×8 character LCD.
     Font,
-    /// An HD44780 command or data write arrived before its power-on reset wait elapsed (15 ms
-    /// after VCC reaches 4.5 V, or 40 ms after 2.7 V).
+    /// An HD44780 command or data write arrived after its internal reset's busy time and before
+    /// its power-on reset wait elapsed (15 ms after VCC reaches 4.5 V), and ran.
     InitWait,
     /// A digital input sat between its guaranteed `VIL` and `VIH` thresholds longer than a normal
     /// edge transition, where the datasheet does not guarantee the logic level.
@@ -234,10 +234,16 @@ pub enum ProtocolRule {
     /// An HD44780 display was on with `VDD - V0` under the LCD voltage floor, so its glass
     /// shows no characters.
     Contrast,
+    /// An HD44780 command or data write arrived inside its internal reset's busy time (10 ms
+    /// after VCC reaches 4.5 V, or the 40 ms wait below it), and was dropped.
+    InitBusy,
+    /// An HD44780 module ran a bus cycle with its supply under the module's minimum operating
+    /// voltage.
+    LowSupply,
 }
 
 impl ProtocolRule {
-    pub(crate) const ALL: [ProtocolRule; 21] = [
+    pub(crate) const ALL: [ProtocolRule; 23] = [
         ProtocolRule::Command,
         ProtocolRule::PixelFormat,
         ProtocolRule::SdaWhileSclHigh,
@@ -259,6 +265,8 @@ impl ProtocolRule {
         ProtocolRule::Setup,
         ProtocolRule::Hold,
         ProtocolRule::Contrast,
+        ProtocolRule::InitBusy,
+        ProtocolRule::LowSupply,
     ];
 
     /// Its place in [`ALL`](Self::ALL).
@@ -290,6 +298,8 @@ impl ProtocolRule {
             "setup" => Some(ProtocolRule::Setup),
             "hold" => Some(ProtocolRule::Hold),
             "contrast" => Some(ProtocolRule::Contrast),
+            "init_busy" => Some(ProtocolRule::InitBusy),
+            "low_supply" => Some(ProtocolRule::LowSupply),
             _ => None,
         }
     }
@@ -1506,8 +1516,32 @@ impl Diagnostic {
             } => {
                 let part = namer(part);
                 format!(
-                    "{part} dropped a write before the HD44780U power-on reset wait elapsed (15 ms after VCC reaches 4.5 V, or 40 ms after 2.7 V), breaking rule {} at {} ps, the first time",
+                    "{part} ran a write that came after the HD44780U internal reset's busy time but before its power-on reset wait elapsed (15 ms after VCC reaches 4.5 V), earlier than the sheet allows, breaking rule {} at {} ps, the first time",
                     rule_text(&ProtocolRule::InitWait),
+                    at.as_ps()
+                )
+            }
+            Diagnostic::ChipProtocol {
+                part,
+                at,
+                rule: ProtocolRule::InitBusy,
+            } => {
+                let part = namer(part);
+                format!(
+                    "{part} dropped a write that came inside the HD44780U internal reset's busy time (10 ms after VCC reaches 4.5 V, or the 40 ms wait after 2.7 V below it), breaking rule {} at {} ps, the first time",
+                    rule_text(&ProtocolRule::InitBusy),
+                    at.as_ps()
+                )
+            }
+            Diagnostic::ChipProtocol {
+                part,
+                at,
+                rule: ProtocolRule::LowSupply,
+            } => {
+                let part = namer(part);
+                format!(
+                    "{part} ran a bus cycle with its supply under the module's minimum operating voltage, outside its sheet, breaking rule {} at {} ps, the first time",
+                    rule_text(&ProtocolRule::LowSupply),
                     at.as_ps()
                 )
             }

@@ -23,10 +23,12 @@ and Adafruit Unified Sensor 1.1.15, under the Apache License 2.0. Their notices 
 `devkitc-gy-bmp280` Block, `blocks/devkitc-gy-bmp280/firmware/LICENSE-bmp280`, `LICENSE-busio`
 and `LICENSE-sensor`. `packages/engine/scripts/sketches.sh` pins those three archives.
 
-`liquidcrystal_8bit.hex` also links the Arduino LiquidCrystal library 1.0.7, under the GNU
-Lesser General Public License, version 2.1 or any later version. Its notice and the license
-text are in the `nano-lcd1602` Block, `blocks/nano-lcd1602/firmware/LICENSE-liquidcrystal`.
-`packages/engine/scripts/sketches.sh` pins that archive.
+`liquidcrystal_8bit.hex` and `liquidcrystal_blink.hex` also link the Arduino LiquidCrystal
+library 1.0.7, under the GNU Lesser General Public License, version 2.1 or any later version.
+Its notice and the license text are in the `nano-lcd1602` Block,
+`blocks/nano-lcd1602/firmware/LICENSE-liquidcrystal`. `packages/engine/scripts/sketches.sh`
+pins that archive. `liquidcrystal_blink/liquidcrystal_blink.ino` is that archive's
+`examples/Blink/Blink.ino`, unchanged, which its authors place in the public domain.
 
 The images also hold the start-up code of the toolchain's C library, version 2.0.0, under that
 library's modified BSD license, whose notice is reproduced in full in LICENSE-libc as the license

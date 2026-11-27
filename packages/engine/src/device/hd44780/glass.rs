@@ -3,9 +3,11 @@
 //!
 //! On the common white-on-blue negative transmissive 1602 LCD, characters are only visible when
 //! both the display and the backlight are on. When unpowered, the display is off, or the
-//! backlight is off, [`visible_lines`] returns two 16-space blank lines and [`glass`] draws dark
-//! unlit glass. An `hd44780` also carries `contrast`, whether `VDD - V0` reaches the LCD
-//! voltage floor, and below it the backlit glass shows no characters either.
+//! backlight is off, [`visible_lines`] returns two 16-space blank lines. [`glass`] draws the
+//! glass lit blue while the backlight is lit, powered or not, and dark unlit glass otherwise.
+//! An `hd44780` also carries `contrast`, whether `VDD - V0` reaches the LCD voltage floor, and
+//! below it the backlit glass shows no characters either. `blink` is 0 with `B = 0`, 1 while the
+//! cursor's character shows all its dots and 2 otherwise.
 
 use crate::display::Panel;
 
@@ -42,15 +44,16 @@ fn setting(panel: &Panel, name: &str) -> u8 {
 }
 
 /// Whether the backlight is lit: on an `hd44780_i2c`, powered, jumper fitted, and PCF8574 P3
-/// high, and on an `hd44780`, powered with the backlight's `A - K` at its lit voltage.
+/// high, and on an `hd44780`, the backlight LED's `A - K` at its lit current, whatever `VDD`.
 pub fn backlight_on(panel: &Panel) -> bool {
-    setting(panel, "powered") != 0 && setting(panel, "backlight") != 0
+    setting(panel, "backlight") != 0
 }
 
 /// Whether characters are visible on the blue transmissive glass: powered, display on,
 /// backlight on, and on an `hd44780` the contrast voltage in range.
 pub fn text_visible(panel: &Panel) -> bool {
-    panel.flags.display_on
+    setting(panel, "powered") != 0
+        && panel.flags.display_on
         && !panel.flags.reset
         && !panel.flags.sleep
         && backlight_on(panel)
@@ -111,7 +114,8 @@ pub fn glass(panel: &Panel, frame: &[u8]) -> Vec<u8> {
     let two_line = setting(panel, "two_line") != 0;
     let shift = usize::from(setting(panel, "shift"));
     let cursor = setting(panel, "cursor") != 0;
-    let blink = setting(panel, "blink") != 0;
+    // The blinking character's all-dots half.
+    let block = setting(panel, "blink") == 1;
     let ac = setting(panel, "ac");
     let in_cgram = setting(panel, "in_cgram") != 0;
     let ddram = &frame[..DDRAM_BYTES];
@@ -135,7 +139,7 @@ pub fn glass(panel: &Panel, frame: &[u8]) -> Vec<u8> {
                 for dot_col in 0..5 {
                     let pixel_on = show_chars
                         && active_row
-                        && ((at_cursor && (blink || (cursor && dot_row == 7)))
+                        && ((at_cursor && (block || (cursor && dot_row == 7)))
                             || ((bits >> (4 - dot_col)) & 1 != 0));
                     let color = if pixel_on { BACKLIT_ON_DOT } else { off_dot };
                     let px0 = cell_x + dot_col * DOT_STEP;

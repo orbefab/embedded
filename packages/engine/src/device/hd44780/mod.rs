@@ -6,7 +6,8 @@
 //! same controller. [`glass`] draws either kind's 16×2 glass with the A00 5×8 ROM [`font`].
 //! This file holds the `hd44780` netlist struct, its JSON wire type, and its electrical side:
 //! `DB0..DB7` push-pull from `VDD` and into `VSS` during a read, the MOS pull-ups on `DB0..DB7`,
-//! `RS` and `R/W`, and the watches on the bus, the supply, `V0` and the backlight.
+//! `RS` and `R/W`, and the watches on the bus, the supply, `V0`, the backlight and the module's
+//! operating voltage.
 
 pub mod font;
 pub(crate) mod glass;
@@ -127,6 +128,7 @@ pub(crate) fn chip(part: PartId, dev: &Hd44780) -> Chip {
     watches.push(across(VDD, VSS, VDD_FAST_V));
     watches.push(across(VDD, V0, dev.lcd_voltage.si.get()));
     watches.push(across(A, K, dev.backlight_voltage.si.get()));
+    watches.push(across(VDD, VSS, dev.operating_voltage.si.get()));
     let mut signals: Vec<(&'static str, usize)> = BUS_PINS
         .into_iter()
         .enumerate()
@@ -203,7 +205,8 @@ pub(crate) fn pin_ratings(dev: &Hd44780) -> Option<PinRatings> {
 /// An HD44780U 16×2 module on its parallel bus. `DB0..DB7` drive a read through `output` and
 /// hold `pull_up` otherwise, as `RS` and `R/W` do. The bus reads through `input_threshold`,
 /// fractions of the supply. The glass shows text while `VDD - V0` is at `lcd_voltage` and the
-/// backlight's `A - K` at `backlight_voltage`.
+/// backlight's `A - K` at `backlight_voltage`. A bus cycle with `VDD - VSS` under
+/// `operating_voltage`, the module's minimum, warns.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Hd44780 {
     pub pins: [NetId; 16],
@@ -212,6 +215,7 @@ pub struct Hd44780 {
     pub input_threshold: Threshold,
     pub lcd_voltage: Value,
     pub backlight_voltage: Value,
+    pub operating_voltage: Value,
     pub draw: LcdDraw,
     /// The pin voltage ratings the run checks. `None` when the part has no `ratings` object.
     pub ratings: Option<Hd44780Ratings>,
@@ -252,6 +256,7 @@ pub(crate) struct WireHd44780 {
     input_threshold: WireThreshold,
     lcd_voltage: WireValue,
     backlight_voltage: WireValue,
+    operating_voltage: WireValue,
     draw: WireLcdDraw,
     #[serde(default)]
     ratings: Option<WireRatings>,
@@ -300,6 +305,14 @@ pub(crate) fn resolve_hd44780(ctx: ParseCtx<'_>, wire: WireHd44780) -> Option<Hd
         wire.backlight_voltage,
         out,
     );
+    let operating_voltage = resolve_value(
+        part_ref,
+        "operating_voltage",
+        "V",
+        true,
+        wire.operating_voltage,
+        out,
+    );
     let logic_current = bounded(
         part_ref,
         "draw.logic_current",
@@ -327,6 +340,7 @@ pub(crate) fn resolve_hd44780(ctx: ParseCtx<'_>, wire: WireHd44780) -> Option<Hd
         input_threshold: input_threshold?,
         lcd_voltage: lcd_voltage?,
         backlight_voltage: backlight_voltage?,
+        operating_voltage: operating_voltage?,
         draw: LcdDraw {
             logic_current: logic_current?,
             holds_above: holds_above?,

@@ -125,6 +125,10 @@
       "why": "On a blue negative transmissive 1602 LCD, characters are only visible when both the display and the backlight are on. `text` returns two 16-space blank lines when either is off.",
     },
     {
+      "what": "oscillator tolerance",
+      "why": "The controller runs at its typical 270 kHz. The sheet gives 190 to 350 kHz with Rf = 91 kohm at 5 V (Hitachi p. 52), and the busy times and the blink scale with it. The blinking character switches every 379.3 ms, the sheet's 409.6 ms at 250 kHz (p. 26) at 270 kHz, on multiples of that from power-on.",
+    },
+    {
       "what": "8-bit bus use and 5x10 font",
       "why": "Only D4 to D7 are wired on a PCF8574 backpack. Any non-Function-Set operation in 8-bit mode warns `chip.protocol` rule `bus_width` and is dropped. Requesting one line of the 5x10 font (`N = 0`, `F = 1`) warns rule `font` and keeps the 5x8 font. With two lines `F` is don't care (Hitachi Table 8, p. 29).",
     },

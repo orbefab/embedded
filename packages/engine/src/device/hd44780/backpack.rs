@@ -91,8 +91,15 @@ impl Device for Hd44780I2c {
         })
     }
 
-    fn run_until(&mut self, _cx: &mut Cx, _limit: Time) -> Option<Stop> {
-        None
+    /// Each switch of the blinking character while `B = 1`.
+    fn run_until(&mut self, _cx: &mut Cx, limit: Time) -> Option<Stop> {
+        let at = self.controller.next_blink().filter(|&at| at <= limit)?;
+        self.controller.blink_at(at);
+        Some(Stop {
+            at,
+            sample: false,
+            record: false,
+        })
     }
 
     fn drive(&self) -> Drives {
@@ -200,7 +207,7 @@ impl Hd44780I2c {
             [
                 u32::from(self.backlight_on()),
                 u32::from(c.cursor_on()),
-                u32::from(c.blink_on()),
+                super::blink(c),
                 u32::from(c.two_line()),
                 u32::from(c.shift()),
                 u32::from(c.current_ac()),

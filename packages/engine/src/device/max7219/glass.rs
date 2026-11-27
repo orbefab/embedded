@@ -98,17 +98,17 @@ mod tests {
         bright[0] = 255;
         let dim_px = glass(&panel(true, 156), &dim);
         let bright_px = glass(&panel(true, 4844), &bright);
-        assert_eq!(lit_count(&dim_px), 1);
-        assert_eq!(lit_count(&bright_px), 1);
+        assert_eq!(lit_count(&panel(true, 156), &dim_px), 1);
+        assert_eq!(lit_count(&panel(true, 4844), &bright_px), 1);
         assert!(bright_px[0] > dim_px[0]);
-        assert!(art(WIDTH, &dim_px).starts_with("#.......\n"));
+        assert!(art(&panel(true, 156), &dim_px).starts_with("#.......\n"));
     }
 
     #[test]
     fn shutdown_blanks_every_dot() {
         let full = [255u8; FRAME_BYTES];
         let px = glass(&panel(false, 4844), &full);
-        assert_eq!(lit_count(&px), 0);
+        assert_eq!(lit_count(&panel(false, 4844), &px), 0);
         let grid = dot_brightness(&panel(false, 4844), &full);
         assert!(grid.iter().flatten().all(|&a| a == 0.0));
     }

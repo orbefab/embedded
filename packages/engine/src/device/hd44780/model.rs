@@ -10,7 +10,9 @@
 //!
 //! `DB0..DB7`, `RS` and `R/W` hold their MOS pull-ups (p. 51), so lines a 4-bit circuit leaves
 //! open read high. The glass shows text only while the backlight is lit and `VDD - V0` is at
-//! least the LCD voltage floor, VLCD1 (p. 51). The display on below that warns `contrast`.
+//! least the LCD voltage floor, VLCD1 (p. 51). The display on below that warns `contrast`. The
+//! backlight is its own LED from `A` to `K`, lit whatever the controller's supply. A bus cycle
+//! with `VDD` under the module's minimum operating voltage runs and warns `low_supply`.
 //!
 //! [`controller`] is the HD44780U itself, and [`backpack`] the `hd44780_i2c` front end on it.
 
@@ -27,7 +29,8 @@ use orbe_model::{
 use controller::{Controller, HEIGHT, WIDTH};
 
 /// Watch order: `RS`, `R/W`, `E`, `DB0..DB7`, then the 2.7 V and 4.5 V supply comparators,
-/// `VDD - V0` at the LCD voltage floor, and the backlight's `A - K` at its lit voltage.
+/// `VDD - V0` at the LCD voltage floor, the backlight's `A - K` at its lit voltage, and `VDD` at
+/// the module's minimum operating voltage.
 pub const WATCH_RS: usize = 0;
 pub const WATCH_RW: usize = 1;
 pub const WATCH_E: usize = 2;
@@ -36,6 +39,7 @@ pub const WATCH_VDD: usize = 11;
 pub const WATCH_VDD_4V5: usize = 12;
 pub const WATCH_CONTRAST: usize = 13;
 pub const WATCH_BACKLIGHT: usize = 14;
+pub const WATCH_OPERATING: usize = 15;
 /// The bus levels in `prev`: `RS`, `R/W`, `E` and `DB0..DB7`.
 const BUS: usize = 11;
 
@@ -53,6 +57,7 @@ const ENABLE_WIDTH: &str = "enable_width";
 const SETUP: &str = "setup";
 const HOLD: &str = "hold";
 const CONTRAST: &str = "contrast";
+const LOW_SUPPLY: &str = "low_supply";
 
 /// Panel settings, in [`Hd44780::settings`] order.
 pub const SETTINGS: [&str; 9] = [
@@ -129,8 +134,10 @@ pub struct Hd44780 {
     fast: bool,
     /// Whether `VDD - V0` is at the LCD voltage floor.
     contrast: bool,
-    /// Whether the backlight's `A - K` is at its lit voltage.
+    /// Whether the backlight's `A - K` is at its lit voltage, the LED's lit current.
     backlight: bool,
+    /// Whether `VDD` is at the module's minimum operating voltage.
+    operating: bool,
     /// The byte a read drives, and whether only `DB7..DB4` carry it. `None` while released.
     out: Option<(u8, bool)>,
     /// A read's drive turns on (`true`) or off at this time.
@@ -169,15 +176,28 @@ impl Device for Hd44780 {
             fast: false,
             contrast: false,
             backlight: false,
+            operating: false,
             out: None,
             due: None,
         })
     }
 
     fn run_until(&mut self, _cx: &mut Cx, limit: Time) -> Option<Stop> {
-        let (at, on) = self.due.filter(|&(at, _)| at <= limit)?;
-        self.due = None;
-        self.out = on.then(|| (self.controller.read_bus(at), self.controller.four_bit()));
+        let read = self.due.filter(|&(at, _)| at <= limit);
+        let blink = self.controller.next_blink().filter(|&at| at <= limit);
+        let at = match (read, blink) {
+            (Some((read, _)), Some(blink)) => read.min(blink),
+            (Some((read, _)), None) => read,
+            (None, Some(blink)) => blink,
+            (None, None) => return None,
+        };
+        if blink == Some(at) {
+            self.controller.blink_at(at);
+        }
+        if let Some((_, on)) = read.filter(|&(read, _)| read == at) {
+            self.due = None;
+            self.out = on.then(|| (self.controller.read_bus(at), self.controller.four_bit()));
+        }
         Some(Stop {
             at,
             sample: false,
@@ -218,6 +238,7 @@ impl Device for Hd44780 {
         self.fast = powered && levels.high(WATCH_VDD_4V5);
         self.contrast = levels.high(WATCH_CONTRAST);
         self.backlight = levels.high(WATCH_BACKLIGHT);
+        self.operating = levels.high(WATCH_OPERATING);
         if !powered {
             return;
         }
@@ -265,6 +286,16 @@ impl Device for Hd44780 {
                 backlight: None,
             },
         }
+    }
+}
+
+/// The `blink` setting: 0 with `B = 0`, 1 while the cursor's character shows all its dots, and
+/// 2 otherwise.
+pub(crate) fn blink(c: &Controller) -> u32 {
+    match (c.blink_on(), c.blink_block()) {
+        (false, _) => 0,
+        (true, true) => 1,
+        (true, false) => 2,
     }
 }
 
@@ -318,6 +349,9 @@ impl Hd44780 {
             cx.broke(ENABLE_CYCLE, at);
         }
         self.rose = Some(at);
+        if !self.operating {
+            cx.broke(LOW_SUPPLY, at);
+        }
         if now[WATCH_RW] {
             self.controller.read_rise(cx, at, now[WATCH_RS]);
             self.due = Some((later(at, timing.data_delay), true));
@@ -373,8 +407,9 @@ impl Hd44780 {
         }
     }
 
+    /// The backlight LED lights from its own current, with or without the controller's supply.
     pub fn backlight_on(&self) -> bool {
-        self.controller.powered() && self.backlight
+        self.backlight
     }
 
     fn settings(&self) -> Settings {
@@ -384,7 +419,7 @@ impl Hd44780 {
             [
                 u32::from(self.backlight_on()),
                 u32::from(c.cursor_on()),
-                u32::from(c.blink_on()),
+                blink(c),
                 u32::from(c.two_line()),
                 u32::from(c.shift()),
                 u32::from(c.current_ac()),

@@ -5,10 +5,11 @@
 //! - Power-on reset (p. 23, Figs. 23–24 pp. 45–46): 8-bit bus (`DL = 1`), 1-line (`N = 0`), 5×8
 //!   font (`F = 0`), display off (`D = 0`, `C = 0`, `B = 0`), entry increment (`I/D = 1`, `S = 0`),
 //!   DDRAM filled with `0x20`, address counter 0, display shift 0. Wait more than 15 ms after `VCC`
-//!   rises to 4.5 V, or more than 40 ms after `VCC` rises to 2.7 V, before the first Function Set;
-//!   writes arriving earlier warn `init_wait`. The internal reset holds the busy flag for 10 ms
-//!   after `VCC` rises to 4.5 V (p. 23), and writes inside it are dropped. Below 4.5 V the sheet
-//!   gives no busy time, so the 40 ms wait is the busy time too.
+//!   rises to 4.5 V, or more than 40 ms after `VCC` rises to 2.7 V, before the first Function Set.
+//!   The internal reset holds the busy flag for 10 ms after `VCC` rises to 4.5 V (p. 23), and a
+//!   write inside it is dropped and warns `init_busy`. Below 4.5 V the sheet gives no busy time,
+//!   so the 40 ms wait is the busy time too. A write after the busy time and before the wait
+//!   runs, and warns `init_wait`.
 //! - 8-bit to 4-bit initialization (Figure 24, p. 46): Function Set with `DL = 1` (`0x30`) keeps
 //!   8-bit mode and resets nibble sync; Function Set with `DL = 0` (`0x20`) enters 4-bit mode.
 //! - Commands and data writes latch on `E`'s falling edge (`RW = 0`). Writes received while busy
@@ -21,6 +22,9 @@
 //! - With `DB0..DB3` not wired, as on a PCF8574 backpack, any operation in 8-bit mode other than
 //!   Function Set warns `bus_width` and is dropped. Requesting one line of the 5×10 font (`N = 0`,
 //!   `F = 1`) warns `font` and keeps 5×8. With two lines `F` is don't care (Table 8, p. 29).
+//! - With `B = 1` the character at the cursor switches between all its dots and itself every
+//!   409.6 ms at f_osc = 250 kHz (p. 26), so every [`BLINK_PS`] at 270 kHz. The blink counter
+//!   runs from power-on, and [`Controller::next_blink`] is each switch while the display is on.
 
 use orbe_model::{Cx, Drawn, Sha256, Time};
 
@@ -41,12 +45,16 @@ pub const POWER_ON_WAIT_2V7_PS: u64 = 40_000_000_000; // 40 ms after VCC rises t
 pub const POWER_ON_BUSY_4V5_PS: u64 = 10_000_000_000;
 pub const CLEAR_BUSY_PS: u64 = 1_520_000_000; // 1.52 ms Clear Display / Return Home
 pub const EXEC_BUSY_PS: u64 = 37_000_000; // 37 us other instructions and RAM access
+/// The blink's half period: 409.6 ms at f_osc = 250 kHz (p. 26), 102,400 clocks, which at the
+/// 270 kHz of Table 6 is 409.6 ms x 250 / 270, the sheet's own 379.2 ms example.
+pub const BLINK_PS: u64 = 102_400 * 1_000_000_000_000 / 270_000;
 
 /// Rule names reported via `Cx::broke`.
 const BUS_WIDTH: &str = "bus_width";
 const FONT: &str = "font";
 const COMMAND: &str = "command";
 const INIT_WAIT: &str = "init_wait";
+const INIT_BUSY: &str = "init_busy";
 
 /// An active read across one `E` pulse in 8-bit mode, or two in 4-bit mode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -79,6 +87,11 @@ pub struct Controller {
     init_ready_at: Time,
     /// The internal reset's busy flag clears at this time (10 ms after 4.5 V, or the 40 ms wait).
     reset_busy_until: Time,
+    /// When `VCC` reached 2.7 V, where the oscillator and its blink counter start.
+    on_at: Time,
+    /// While `B = 1` and the display is on: whether the cursor's character shows all its dots,
+    /// and when it next switches.
+    blink: Option<(bool, Time)>,
     /// Bus interface: false = 8-bit (power-on), true = 4-bit.
     four_bit: bool,
     /// `N`: false = 1-line, true = 2-line.
@@ -122,6 +135,8 @@ impl Controller {
             reached_4v5: false,
             init_ready_at: Time::ZERO,
             reset_busy_until: Time::ZERO,
+            on_at: Time::ZERO,
+            blink: None,
             four_bit: false,
             two_line: false,
             display_on: false,
@@ -148,6 +163,7 @@ impl Controller {
             *self = Controller::new(self.low_lines);
             self.powered = powered;
             if powered {
+                self.on_at = at;
                 self.reached_4v5 = fast;
                 let wait = if fast {
                     POWER_ON_WAIT_4V5_PS
@@ -200,6 +216,28 @@ impl Controller {
 
     pub fn blink_on(&self) -> bool {
         self.blink_on
+    }
+
+    /// While `B = 1`, whether the cursor's character shows all its dots now rather than itself.
+    pub fn blink_block(&self) -> bool {
+        matches!(self.blink, Some((true, _)))
+    }
+
+    /// The next time the blinking character switches, while `B = 1` and the display is on.
+    pub fn next_blink(&self) -> Option<Time> {
+        self.blink.map(|(_, at)| at)
+    }
+
+    /// Puts the blink where its counter stands at `at`: on a switch [`next_blink`] gave, or
+    /// after a command that turns the display or the blink on or off.
+    ///
+    /// [`next_blink`]: Self::next_blink
+    pub fn blink_at(&mut self, at: Time) {
+        self.blink = (self.powered && self.display_on && self.blink_on).then(|| {
+            let halves = at.as_ps().saturating_sub(self.on_at.as_ps()) / BLINK_PS;
+            let next = self.on_at.as_ps().saturating_add((halves + 1) * BLINK_PS);
+            (halves.is_multiple_of(2), Time::from_ps(next))
+        });
     }
 
     pub fn shift(&self) -> u8 {
@@ -309,7 +347,9 @@ impl Controller {
         // Write cycle cancels any unfinished read cycle.
         self.read_cycle = None;
 
-        if self.in_power_on_wait(at) {
+        if at < self.reset_busy_until {
+            cx.broke(INIT_BUSY, at);
+        } else if self.in_power_on_wait(at) {
             cx.broke(INIT_WAIT, at);
         }
 
@@ -399,6 +439,7 @@ impl Controller {
             self.display_on = byte & 0x04 != 0;
             self.cursor_on = byte & 0x02 != 0;
             self.blink_on = byte & 0x01 != 0;
+            self.blink_at(at);
             self.set_busy(at, EXEC_BUSY_PS);
         } else if byte & 0xf0 == 0x10 {
             // Cursor or Display Shift.

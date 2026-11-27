@@ -1154,8 +1154,8 @@ impl Open {
             .expect("a part with a reading of screen is a display");
         let panel = display.panel();
         let pixels = display.pixels();
-        let lit = orbe_engine::display::lit_count(&pixels);
-        let rows = orbe_engine::display::art(panel.width, &pixels)
+        let lit = orbe_engine::display::lit_count(&panel, &pixels);
+        let rows = orbe_engine::display::art(&panel, &pixels)
             .lines()
             .map(str::to_string)
             .collect();

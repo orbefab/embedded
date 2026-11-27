@@ -204,10 +204,10 @@ fn unpowered_part_does_nothing_and_draws_nothing() {
 fn power_on_wait_warns_and_drops_early_commands_until_sheet_wait_elapses() {
     let mut b = Bench::new(true);
     b.power(true);
-    // Inside the 10 ms reset busy time, switching to 4-bit warns `init_wait` and is dropped.
+    // Inside the 10 ms reset busy time, switching to 4-bit warns `init_busy` and is dropped.
     b.t_ps = POWER_ON_BUSY_4V5_PS - 10_000_000;
     let cx = b.pulse_nibble(0x20);
-    assert_eq!(cx.broken().map(|(rule, _)| rule), Some("init_wait"));
+    assert_eq!(cx.broken().map(|(rule, _)| rule), Some("init_busy"));
     assert!(!b.dev.is_four_bit());
 
     // Past the busy time and inside the 15 ms wait, the switch still warns, and the controller
@@ -234,14 +234,14 @@ fn power_on_wait_warns_and_drops_early_commands_until_sheet_wait_elapses() {
 #[test]
 fn early5_and_early15_enforce_hd44780_power_on_reset_waits() {
     // early5 at 5 V (VCC >= 4.5 V at t = 0): waiting 5 ms before the first Function Set is
-    // inside the 15 ms Fig. 24 wait. The first write at 5.002 ms warns `init_wait`, and the
-    // Function Sets that enter 4-bit mode land inside the 10 ms reset busy time and are dropped,
-    // so 'E' never appears.
+    // inside the 15 ms Fig. 24 wait. The first write at 5.002 ms lands inside the 10 ms reset
+    // busy time and warns `init_busy`, and the Function Sets that enter 4-bit mode are dropped
+    // with it, so 'E' never appears.
     let mut early5 = Bench::new(true);
     early5.power(true);
     early5.advance_us(5_000);
     let broken = early5.run_fig24_and_write(b'E');
-    assert_eq!(broken, Some(("init_wait", Time::from_ps(5_002_000_000))));
+    assert_eq!(broken, Some(("init_busy", Time::from_ps(5_002_000_000))));
     assert!(!early5.dev.is_four_bit());
     assert_eq!(early5.lines(), ["                ", "                "]);
 
@@ -269,13 +269,14 @@ fn early5_and_early15_enforce_hd44780_power_on_reset_waits() {
     assert_eq!(early15_delayed.lines()[0].trim_end(), "E");
 
     // early15 at 3.3 V (VCC >= 2.7 V at t = 0, never reaches 4.5 V): the 40 ms Fig. 24 line
-    // applies. Waiting 15 ms warns `init_wait` at 15.002 ms and drops every write, so 'E' does
-    // not appear. Waiting past 40 ms succeeds with no warning.
+    // applies, and below 4.5 V it is the busy time too. Waiting 15 ms warns `init_busy` at
+    // 15.002 ms and drops every write, so 'E' does not appear. Waiting past 40 ms succeeds with
+    // no warning.
     let mut early15_3v3 = Bench::new(true);
     early15_3v3.power_3v3();
     early15_3v3.advance_us(15_000);
     let broken = early15_3v3.run_fig24_and_write(b'E');
-    assert_eq!(broken, Some(("init_wait", Time::from_ps(15_002_000_000))));
+    assert_eq!(broken, Some(("init_busy", Time::from_ps(15_002_000_000))));
     assert!(!early15_3v3.dev.is_four_bit());
     assert_eq!(
         early15_3v3.lines(),
@@ -292,7 +293,7 @@ fn early5_and_early15_enforce_hd44780_power_on_reset_waits() {
 
 /// Electrical MNA check of both supply comparators (2.7 V and 4.5 V): sends one I2C write pulsing
 /// `E` high then low for Function Set `0x30` at `write_at_ms`, verifying `chip.protocol` rule
-/// `init_wait` fires based on the supply's actual rise time and voltage.
+/// `init_busy` or `init_wait` fires based on the supply's actual rise time and voltage.
 #[test]
 fn supply_comparators_enforce_15ms_at_5v_and_40ms_at_3v3() {
     fn run_i2c_write(vcc_v: f64, vcc_step_ms: Option<u64>, write_at_ms: u64) -> Vec<Diagnostic> {
@@ -392,35 +393,49 @@ fn supply_comparators_enforce_15ms_at_5v_and_40ms_at_3v3() {
         simulate(&parsed).diagnostics().to_vec()
     }
 
-    let has_init_wait = |diags: &[Diagnostic]| {
-        diags.iter().any(|d| {
-            matches!(
-                d,
-                Diagnostic::ChipProtocol {
-                    rule: ProtocolRule::InitWait,
-                    ..
+    // The power-on rules each run raises.
+    let init = |diags: &[Diagnostic]| -> Vec<ProtocolRule> {
+        diags
+            .iter()
+            .filter_map(|d| match d {
+                Diagnostic::ChipProtocol { rule, .. }
+                    if matches!(rule, ProtocolRule::InitWait | ProtocolRule::InitBusy) =>
+                {
+                    Some(*rule)
                 }
-            )
-        })
+                _ => None,
+            })
+            .collect()
     };
 
-    // 5 V from t = 0: early5 (5 ms) warns; early15 (15 ms) is legal (> 15 ms at E fall).
+    // 5 V from t = 0: early5 (5 ms) is inside the 10 ms busy time and is dropped; early15
+    // (15 ms) is legal (> 15 ms at E fall).
     let d_5v_5ms = run_i2c_write(5.0, None, 5);
-    assert!(has_init_wait(&d_5v_5ms), "{d_5v_5ms:?}");
+    assert_eq!(init(&d_5v_5ms), [ProtocolRule::InitBusy], "{d_5v_5ms:?}");
     let d_5v_15ms = run_i2c_write(5.0, None, 15);
-    assert!(!has_init_wait(&d_5v_15ms), "{d_5v_15ms:?}");
+    assert_eq!(init(&d_5v_15ms), [], "{d_5v_15ms:?}");
 
-    // 5 V stepping up at 5 ms: write at 15 ms (only 10 ms after 4.5 V) warns; at 20 ms is legal.
+    // 5 V stepping up at 5 ms: write at 15 ms (only 10 ms after 4.5 V) runs early and warns; at
+    // 20 ms is legal.
     let d_step_15ms = run_i2c_write(5.0, Some(5), 15);
-    assert!(has_init_wait(&d_step_15ms), "{d_step_15ms:?}");
+    assert_eq!(
+        init(&d_step_15ms),
+        [ProtocolRule::InitWait],
+        "{d_step_15ms:?}"
+    );
     let d_step_20ms = run_i2c_write(5.0, Some(5), 20);
-    assert!(!has_init_wait(&d_step_20ms), "{d_step_20ms:?}");
+    assert_eq!(init(&d_step_20ms), [], "{d_step_20ms:?}");
 
-    // 3.3 V from t = 0: early15 (15 ms < 40 ms) warns; 40 ms is legal (> 40 ms at E fall).
+    // 3.3 V from t = 0: early15 (15 ms < 40 ms) is inside the busy time below 4.5 V; 40 ms is
+    // legal (> 40 ms at E fall).
     let d_3v3_15ms = run_i2c_write(3.3, None, 15);
-    assert!(has_init_wait(&d_3v3_15ms), "{d_3v3_15ms:?}");
+    assert_eq!(
+        init(&d_3v3_15ms),
+        [ProtocolRule::InitBusy],
+        "{d_3v3_15ms:?}"
+    );
     let d_3v3_40ms = run_i2c_write(3.3, None, 40);
-    assert!(!has_init_wait(&d_3v3_40ms), "{d_3v3_40ms:?}");
+    assert_eq!(init(&d_3v3_40ms), [], "{d_3v3_40ms:?}");
 }
 
 #[test]
@@ -641,4 +656,21 @@ fn unsupported_8bit_bus_and_5x10_font_stop_loudly() {
     assert_ne!(b3.read_hd44780(false) & 0x80, 0);
     b3.t_ps += EXEC_BUSY_PS;
     assert_eq!(b3.read_hd44780(false) & 0x80, 0);
+}
+
+#[test]
+fn the_screen_art_shows_the_white_dots_on_the_backlit_glass() {
+    let mut b = Bench::new(true);
+    b.power(true);
+    b.t_ps = POWER_ON_WAIT_4V5_PS + 1_000_000;
+    assert_eq!(b.run_fig24_and_write(b'E'), None);
+    let panel = b.panel();
+    assert!(backlight_on(&panel));
+    let pixels = glass(&panel, display::frame(b.dev.view()));
+    // The A00 ROM's `E` lights 18 of its 40 dots, each 2 by 2 pixels, and the blue glass none.
+    assert_eq!(display::lit_count(&panel, &pixels), 18 * 4);
+    let art = display::art(&panel, &pixels);
+    let rows: Vec<&str> = art.lines().collect();
+    assert_eq!(&rows[8][18..33], "##.##.##.##.##.");
+    assert_eq!(&rows[11][18..33], "##.............");
 }

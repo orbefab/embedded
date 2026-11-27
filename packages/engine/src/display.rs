@@ -139,20 +139,27 @@ pub fn glass(panel: &Panel, frame: &[u8]) -> Vec<u8> {
 /// Red, green, blue and alpha, a byte each.
 const RGBA: usize = 4;
 
-/// Whether a glass pixel reads lit: opaque, with its brightest channel at least half scale.
-fn lit(pixel: &[u8]) -> bool {
-    pixel[3] == 255 && pixel[..3].iter().any(|&channel| channel >= 128)
+/// Whether a glass pixel of a `kind` panel reads lit: opaque, with its brightest channel at
+/// least half scale. A character LCD's backlit glass is blue at that brightness everywhere, so
+/// there a pixel reads lit only when all three channels are, as its white dots are.
+fn lit(kind: &str, pixel: &[u8]) -> bool {
+    let bright = |channel: &u8| *channel >= 128;
+    pixel[3] == 255
+        && match kind {
+            "hd44780" | "hd44780_i2c" => pixel[..3].iter().all(bright),
+            _ => pixel[..3].iter().any(bright),
+        }
 }
 
 /// The glass as text, one line per row, each ended by `\n`: `#` for a lit pixel, `.` for a dark
 /// one, and a space for a pixel off the glass, which is transparent. `pixels` is what [`glass`]
-/// returns for a panel `width` pixels wide.
-pub fn art(width: u16, pixels: &[u8]) -> String {
-    let row = usize::from(width) * RGBA;
+/// returns for `panel`.
+pub fn art(panel: &Panel, pixels: &[u8]) -> String {
+    let row = usize::from(panel.width) * RGBA;
     let mut text = String::with_capacity(pixels.len() / RGBA + pixels.len() / row.max(1));
     for line in pixels.chunks(row.max(1)) {
         for pixel in line.chunks(RGBA) {
-            text.push(match (pixel[3], lit(pixel)) {
+            text.push(match (pixel[3], lit(panel.kind, pixel)) {
                 (0, _) => ' ',
                 (_, true) => '#',
                 (_, false) => '.',
@@ -163,9 +170,12 @@ pub fn art(width: u16, pixels: &[u8]) -> String {
     text
 }
 
-/// How many pixels of the glass read lit, as [`art`] marks them `#`.
-pub fn lit_count(pixels: &[u8]) -> usize {
-    pixels.chunks(RGBA).filter(|pixel| lit(pixel)).count()
+/// How many pixels of `panel`'s glass read lit, as [`art`] marks them `#`.
+pub fn lit_count(panel: &Panel, pixels: &[u8]) -> usize {
+    pixels
+        .chunks(RGBA)
+        .filter(|pixel| lit(panel.kind, pixel))
+        .count()
 }
 
 /// `pixels`, `width` by `height` pixels as [`glass`] returns them, as a PNG file: 8 bits a
@@ -409,8 +419,8 @@ mod tests {
         assert_eq!(png.len(), 8 + 25 + 12 + 2 + 5 + 64 * (1 + 128 * 4) + 4 + 12);
         // The zlib stream's check: every filter byte and pixel byte summed as Adler-32 says.
         let pixels = glass(&oled(), &images[0].1);
-        assert_eq!(lit_count(&pixels), 1);
-        assert_eq!(&art(128, &pixels)[..4], "#...");
+        assert_eq!(lit_count(&oled(), &pixels), 1);
+        assert_eq!(&art(&oled(), &pixels)[..4], "#...");
     }
 
     #[test]
