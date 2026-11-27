@@ -872,25 +872,43 @@ fn supply_power_cycles_stay_silent_while_sags_incomplete_turn_on_and_open_ends_w
     let end_from_on = dht_steps(6 * MS, 5.0, &[(2 * MS, 2.2)]);
     assert_eq!(refs(&run(&end_from_on)), ["rating.supply_low #dht.pin.VCC"]);
 
-    // A nanosecond dip inside a longer low-supply episode does not replace the held voltage,
-    // while a microsecond-scale dip does.
+    // A sub-microsecond dip (or upward glitch) inside a longer low-supply episode does not replace
+    // the held voltage, while a level held for at least 1 us does: after recovery it names the
+    // dip's depth, and on a later plateau it names that plateau.
     const NS: u64 = 1_000;
     const US: u64 = 1_000_000;
-    let brief_dip = dht_steps(4 * MS, 3.0, &[(MS, 1.5), (MS + 100 * NS, 3.0)]);
+    let brief_dip = dht_steps(4 * MS, 3.0, &[(MS, 1.5), (MS + 100 * NS, 5.0)]);
     let found = run(&brief_dip);
     let [low] = supplies(&found)[..] else {
         panic!("expected one supply_low: {found:?}");
     };
     assert!((low.voltage - 3.0).abs() < 1e-6, "{}", low.voltage);
+    assert_eq!(low.over_ps, Some(MS + 100 * NS));
 
-    let held_dip = dht_steps(4 * MS, 3.0, &[(MS, 1.5), (MS + 2 * US, 3.0)]);
-    let found = run(&held_dip);
+    let brief_upward = dht_steps(4 * MS, 1.5, &[(MS, 3.0), (MS + 100 * NS, 5.0)]);
+    let found = run(&brief_upward);
     let [low] = supplies(&found)[..] else {
         panic!("expected one supply_low: {found:?}");
     };
     assert!((low.voltage - 1.5).abs() < 1e-6, "{}", low.voltage);
 
-    // A sub-microsecond episode followed by a held episode reports the held voltage.
+    let held_dip_recover = dht_steps(4 * MS, 3.0, &[(MS, 1.5), (MS + 2 * US, 5.0)]);
+    let found = run(&held_dip_recover);
+    let [low] = supplies(&found)[..] else {
+        panic!("expected one supply_low: {found:?}");
+    };
+    assert!((low.voltage - 1.5).abs() < 1e-6, "{}", low.voltage);
+    assert_eq!(low.over_ps, Some(MS + 2 * US));
+
+    let held_dip_plateau = dht_steps(4 * MS, 3.0, &[(MS, 1.5), (MS + 2 * US, 3.0)]);
+    let found = run(&held_dip_plateau);
+    let [low] = supplies(&found)[..] else {
+        panic!("expected one supply_low: {found:?}");
+    };
+    assert!((low.voltage - 3.0).abs() < 1e-6, "{}", low.voltage);
+    assert_eq!(low.over_ps, Some(4 * MS));
+
+    // A held episode beats a sub-microsecond episode in either order, while over_ps sums both.
     let short_then_held = dht_steps(
         6 * MS,
         5.0,
@@ -906,4 +924,22 @@ fn supply_power_cycles_stay_silent_while_sags_incomplete_turn_on_and_open_ends_w
         panic!("expected one supply_low: {found:?}");
     };
     assert!((low.voltage - 2.8).abs() < 1e-6, "{}", low.voltage);
+    assert_eq!(low.over_ps, Some(2 * MS + 100 * NS));
+
+    let held_then_short = dht_steps(
+        6 * MS,
+        5.0,
+        &[
+            (MS, 2.8),
+            (3 * MS, 5.0),
+            (4 * MS, 1.5),
+            (4 * MS + 100 * NS, 5.0),
+        ],
+    );
+    let found = run(&held_then_short);
+    let [low] = supplies(&found)[..] else {
+        panic!("expected one supply_low: {found:?}");
+    };
+    assert!((low.voltage - 2.8).abs() < 1e-6, "{}", low.voltage);
+    assert_eq!(low.over_ps, Some(2 * MS + 100 * NS));
 }

@@ -672,9 +672,19 @@ impl Session {
                 Some((probe.at(), probe.values(), cores)),
                 include_open_supply,
             ),
-            State::Running { accepted, next, .. } if accepted.at == Time::ZERO => self
-                .ratings
-                .now_with(Some((next.at, &next.row, cores)), include_open_supply),
+            State::Running { accepted, next, .. } if accepted.at == Time::ZERO => {
+                let mut found = self
+                    .ratings
+                    .now_with(Some((next.at, &next.row, cores)), include_open_supply);
+                for diagnostic in &mut found {
+                    if let Diagnostic::RatingSupplyLow(excursion) = diagnostic
+                        && let Some(over_ps) = &mut excursion.over_ps
+                    {
+                        *over_ps = 0;
+                    }
+                }
+                found
+            }
             _ => self.ratings.now_with(None, include_open_supply),
         }
     }

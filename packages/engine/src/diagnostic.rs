@@ -662,11 +662,11 @@ pub struct SupplyExcursion {
     pub min: f64,
     /// Clock frequency in Hz when the minimum depends on the chip's clock (such as an ATmega328P).
     pub clock_hz: Option<u32>,
-    /// Lowest supply voltage held continuously for at least `SUPPLY_HOLD_PS` while above the
-    /// unpowered floor and below the minimum (or the lowest bound held across the episode when no
-    /// warning episode lasted `SUPPLY_HOLD_PS`, or the operating-point sample), in V.
+    /// Supply voltage held continuously for at least `SUPPLY_HOLD_PS` most recently while above
+    /// the unpowered floor and below the minimum (or the episode's upper bound when no warning
+    /// episode lasted `SUPPLY_HOLD_PS`, or the operating-point sample), in V.
     pub voltage: f64,
-    /// When the lowest held supply voltage occurred.
+    /// When the reported supply voltage occurred.
     pub peak_at: Time,
     /// First sample below the minimum.
     pub first: Time,

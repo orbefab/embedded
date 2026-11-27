@@ -170,9 +170,11 @@ impl Open {
         during: &mut dyn FnMut(&Progress) -> ControlFlow<()>,
     ) -> Outcome {
         let outcome = self.step(step, during);
-        let Some(held) = self.unlisted.take() else {
+        let Some(mut held) = self.unlisted.take() else {
             return outcome;
         };
+        let probe = self.engine.probe();
+        self.refresh_supply_low_changes(&mut held.changes, &probe);
         match outcome {
             Ok(data) => Ok(held_then(held, data)),
             Err(mut failed) => {
@@ -346,6 +348,7 @@ impl Open {
         });
         let glows = {
             let probe = self.engine.probe();
+            self.refresh_supply_low_changes(&mut changes, &probe);
             self.light.glows(&probe)
         };
         let leds = glows

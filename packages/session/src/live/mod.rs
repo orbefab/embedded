@@ -610,9 +610,14 @@ impl Open {
     /// `from_ps` on that list is where the held stretch started.
     fn pause(&mut self) -> Outcome {
         self.playing = false;
+        let mut played = self.unlisted.take();
+        if let Some(stepped) = &mut played {
+            let probe = self.engine.probe();
+            self.refresh_supply_low_changes(&mut stepped.changes, &probe);
+        }
         Ok(Data::Paced {
             playing: false,
-            played: self.unlisted.take(),
+            played,
         })
     }
 
@@ -640,7 +645,9 @@ impl Open {
         } else {
             self.engine.settled_diagnostics()
         };
-        found.retain(|diagnostic| !diagnostic.over_now());
+        found.retain(|diagnostic| {
+            !diagnostic.over_now() && !matches!(diagnostic, EngineDiagnostic::RatingSupplyLow(_))
+        });
         let known: BTreeSet<Key> = found.iter().map(key).collect();
         let over = if include_open_supply {
             self.engine.over_ratings(probe)
@@ -668,6 +675,47 @@ impl Open {
         });
         orbe_engine::run_folder::sort_diagnostics(&mut found);
         found
+    }
+
+    /// Updates each `rating.supply_low` entry in `changes` to its value through `probe` so a
+    /// `step` or `pause` line matches the `snapshot` at the same time.
+    pub(super) fn refresh_supply_low_changes(
+        &self,
+        changes: &mut [crate::reply::Change],
+        probe: &Probe,
+    ) {
+        if !changes.iter().any(|change| {
+            matches!(
+                change,
+                crate::reply::Change::Diagnostic { diagnostic, .. }
+                    if diagnostic.code == "rating.supply_low"
+            )
+        }) {
+            return;
+        }
+        let latest = self.findings(probe);
+        for change in changes {
+            let crate::reply::Change::Diagnostic { diagnostic, .. } = change else {
+                continue;
+            };
+            if diagnostic.code != "rating.supply_low" {
+                continue;
+            }
+            let Some(fresh) = latest.iter().find(|d| {
+                d.code() == "rating.supply_low"
+                    && d.refs()
+                        .iter()
+                        .map(ToString::to_string)
+                        .eq(diagnostic.json["refs"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(serde_json::Value::as_str))
+            }) else {
+                continue;
+            };
+            *diagnostic = self.diagnostic(fresh);
+        }
     }
 
     fn diagnostics(&self, probe: &Probe) -> Vec<Diagnostic> {

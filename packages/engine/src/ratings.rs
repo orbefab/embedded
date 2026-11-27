@@ -346,18 +346,30 @@ struct SupplySample {
     v: f64,
 }
 
+#[derive(Clone, Copy)]
+struct SupplySpan {
+    from: Time,
+    to: Time,
+    v_from: f64,
+    v_to: f64,
+}
+
 #[derive(Clone)]
 struct SupplyEpisode {
     entry: SupplyEntry,
     first: Time,
+    /// When this continuous low-band episode began, for measuring [`SUPPLY_HOLD_PS`].
+    hold_since: Time,
     /// Previous sample in this continuous low-band episode.
     last: SupplySample,
-    /// Monotone decreasing queue of `(span_end, peak_sample)` over the last [`SUPPLY_HOLD_PS`],
-    /// where `peak_sample` is the higher-voltage endpoint of each step (or the new sample alone
-    /// after a restart). Once the episode reaches [`SUPPLY_HOLD_PS`], the front is the lowest
-    /// voltage bound that held across that window.
-    hold: VecDeque<(Time, SupplySample)>,
-    /// Lowest voltage bound held continuously for at least [`SUPPLY_HOLD_PS`] in this episode.
+    /// Steps intersecting the trailing [`SUPPLY_HOLD_PS`] window, oldest first. Only the front
+    /// span can straddle `at - SUPPLY_HOLD_PS`.
+    spans: VecDeque<SupplySpan>,
+    /// Monotone increasing queue of `(span_end, min_sample)` for spans in the trailing window.
+    min_q: VecDeque<(Time, SupplySample)>,
+    /// Monotone decreasing queue of `(span_end, max_sample)` for spans in the trailing window.
+    max_q: VecDeque<(Time, SupplySample)>,
+    /// Level held continuously for at least [`SUPPLY_HOLD_PS`] most recently in this episode.
     held: Option<SupplySample>,
     over_ps: Option<u64>,
 }
@@ -903,15 +915,13 @@ impl Ratings {
             }
         }
         for supply in &mut self.supplies {
-            if let Some(ep) = &mut supply.episode
-                && let (Some(last), Some(over_ps)) = (self.last, &mut ep.over_ps)
-            {
-                *over_ps += at.as_ps() - last.as_ps();
-            }
             let (v, band) = supply.read(row);
             match band {
                 SupplyBand::Low => {
                     if let Some(ep) = &mut supply.episode {
+                        if let (Some(last), Some(over_ps)) = (self.last, &mut ep.over_ps) {
+                            *over_ps += at.as_ps() - last.as_ps();
+                        }
                         ep.push(at, v, self.restarted);
                     } else {
                         let entry = match supply.last_band {
@@ -920,18 +930,24 @@ impl Ratings {
                             Some(SupplyBand::On) => SupplyEntry::On,
                             Some(SupplyBand::Low) => unreachable!("episode is open while Low"),
                         };
-                        supply.episode = Some(SupplyEpisode {
-                            entry,
-                            first: at,
-                            last: SupplySample { at, v },
-                            hold: VecDeque::new(),
-                            held: None,
-                            over_ps: self.timing.over_ps(),
-                        });
+                        let start = match (self.timing, entry, back) {
+                            (Timing::Run, SupplyEntry::Start, _) if self.last.is_none() => {
+                                Time::ZERO
+                            }
+                            (Timing::Run, _, Some(last)) => last,
+                            _ => at,
+                        };
+                        supply.episode =
+                            Some(SupplyEpisode::start(entry, start, at, v, self.timing));
                     }
                 }
                 SupplyBand::On | SupplyBand::Off => {
-                    if let Some(ep) = supply.episode.take() {
+                    if let Some(mut ep) = supply.episode.take() {
+                        if !self.restarted
+                            && let (Some(last), Some(over_ps)) = (self.last, &mut ep.over_ps)
+                        {
+                            *over_ps += at.as_ps() - last.as_ps();
+                        }
                         let power_cycle = matches!(
                             (ep.entry, band),
                             (SupplyEntry::Off, SupplyBand::On) | (SupplyEntry::On, SupplyBand::Off)
@@ -1524,53 +1540,157 @@ impl Window {
     }
 }
 
-impl SupplyEpisode {
-    fn push(&mut self, at: Time, v: f64, restarted: bool) {
-        let sample = SupplySample { at, v };
-        let prev = self.last;
-        self.last = sample;
-        let high = if restarted || sample.v >= prev.v {
-            sample
+impl SupplySpan {
+    /// Min and max samples of this span over `[from.max(cutoff), to]`, linearly interpolating at
+    /// `cutoff` when the span straddles it.
+    fn bounds_since(&self, cutoff: u64) -> (SupplySample, SupplySample) {
+        let (left_at, v_left) = if self.from.as_ps() < cutoff {
+            let dt = (self.to.as_ps() - self.from.as_ps()) as f64;
+            let rem = (self.to.as_ps() - cutoff) as f64;
+            let v = self.v_to - (self.v_to - self.v_from) * (rem / dt);
+            (Time::from_ps(cutoff), v)
         } else {
-            prev
+            (self.from, self.v_from)
         };
-        while self.hold.back().is_some_and(|(_, back)| back.v <= high.v) {
-            self.hold.pop_back();
+        let left = SupplySample {
+            at: left_at,
+            v: v_left,
+        };
+        let right = SupplySample {
+            at: self.to,
+            v: self.v_to,
+        };
+        if v_left < self.v_to {
+            (left, right)
+        } else if v_left > self.v_to {
+            (right, left)
+        } else {
+            (right, right)
         }
-        self.hold.push_back((at, high));
+    }
+}
+
+impl SupplyEpisode {
+    fn start(entry: SupplyEntry, start: Time, at: Time, v: f64, timing: Timing) -> SupplyEpisode {
+        let mut ep = SupplyEpisode {
+            entry,
+            first: start,
+            hold_since: start,
+            last: SupplySample { at, v },
+            spans: VecDeque::new(),
+            min_q: VecDeque::new(),
+            max_q: VecDeque::new(),
+            held: None,
+            over_ps: timing.over_ps().map(|_| at.as_ps() - start.as_ps()),
+        };
+        if at > start {
+            ep.record_span(SupplySpan {
+                from: start,
+                to: at,
+                v_from: v,
+                v_to: v,
+            });
+        }
+        ep
+    }
+
+    fn push(&mut self, at: Time, v: f64, restarted: bool) {
+        let prev = self.last;
+        self.last = SupplySample { at, v };
+        if at <= prev.at {
+            return;
+        }
+        let v_from = if restarted { v } else { prev.v };
+        self.record_span(SupplySpan {
+            from: prev.at,
+            to: at,
+            v_from,
+            v_to: v,
+        });
+    }
+
+    fn record_span(&mut self, span: SupplySpan) {
+        let (s_lo, s_hi) = span.bounds_since(span.from.as_ps());
+        self.spans.push_back(span);
+        while self.min_q.back().is_some_and(|(_, back)| back.v >= s_lo.v) {
+            self.min_q.pop_back();
+        }
+        self.min_q.push_back((span.to, s_lo));
+        while self.max_q.back().is_some_and(|(_, back)| back.v <= s_hi.v) {
+            self.max_q.pop_back();
+        }
+        self.max_q.push_back((span.to, s_hi));
+
+        let at = span.to;
         let cutoff = at.as_ps().saturating_sub(SUPPLY_HOLD_PS);
-        while self
-            .hold
-            .front()
-            .is_some_and(|(to, _)| to.as_ps() <= cutoff)
-        {
-            self.hold.pop_front();
+        while self.spans.front().is_some_and(|s| s.to.as_ps() <= cutoff) {
+            self.spans.pop_front();
         }
-        if at.as_ps() - self.first.as_ps() >= SUPPLY_HOLD_PS
-            && let Some(&(_, bound)) = self.hold.front()
-            && self.held.is_none_or(|held| bound.v < held.v)
+        let drop_to = match self.spans.front() {
+            Some(front) if front.from.as_ps() < cutoff => front.to.as_ps(),
+            _ => cutoff,
+        };
+        while self
+            .min_q
+            .front()
+            .is_some_and(|(to, _)| to.as_ps() <= drop_to)
         {
-            self.held = Some(bound);
+            self.min_q.pop_front();
+        }
+        while self
+            .max_q
+            .front()
+            .is_some_and(|(to, _)| to.as_ps() <= drop_to)
+        {
+            self.max_q.pop_front();
+        }
+
+        if at.as_ps() - self.hold_since.as_ps() >= SUPPLY_HOLD_PS
+            && let Some((lo, hi)) = self.window_bounds(cutoff)
+        {
+            self.held = Some(match self.held {
+                None => hi,
+                Some(cur) if hi.v < cur.v => hi,
+                Some(cur) if lo.v > cur.v => lo,
+                Some(cur) => cur,
+            });
+        }
+    }
+
+    /// Min and max samples across `[at - SUPPLY_HOLD_PS, at]` (`cutoff = at - SUPPLY_HOLD_PS`).
+    fn window_bounds(&self, cutoff: u64) -> Option<(SupplySample, SupplySample)> {
+        let front = self.spans.front()?;
+        if front.from.as_ps() < cutoff {
+            let (mut lo, mut hi) = front.bounds_since(cutoff);
+            if let Some(&(_, q_lo)) = self.min_q.front()
+                && q_lo.v <= lo.v
+            {
+                lo = q_lo;
+            }
+            if let Some(&(_, q_hi)) = self.max_q.front()
+                && q_hi.v >= hi.v
+            {
+                hi = q_hi;
+            }
+            Some((lo, hi))
+        } else {
+            Some((self.min_q.front()?.1, self.max_q.front()?.1))
         }
     }
 
     fn reading(&self) -> (SupplySample, bool) {
         match self.held {
             Some(held) => (held, true),
-            None => (self.hold.front().map_or(self.last, |&(_, s)| s), false),
+            None => (self.max_q.front().map_or(self.last, |&(_, s)| s), false),
         }
     }
 }
 
-/// Whether a merged `rating.supply_low` voltage should replace the existing one: any reading held
-/// for at least [`SUPPLY_HOLD_PS`] beats an unheld shorter-episode reading, and ties take the
-/// lower voltage.
-fn replaces_supply_voltage((cur_v, cur_held): (f64, bool), (new_v, new_held): (f64, bool)) -> bool {
-    match (cur_held, new_held) {
-        (false, true) => true,
-        (true, false) => false,
-        _ => new_v < cur_v,
-    }
+/// Whether a newer `rating.supply_low` reading replaces the existing one: any reading held for at
+/// least [`SUPPLY_HOLD_PS`] beats an unheld shorter-episode reading, and ties take the newer
+/// reading.
+fn replaces_supply_voltage(cur_held: bool, new_held: bool) -> bool {
+    !cur_held || new_held
 }
 
 impl SupplyWatch {
@@ -1611,10 +1731,7 @@ impl SupplyWatch {
                 self.excursion_held = held;
             }
             Some(existing) => {
-                if replaces_supply_voltage(
-                    (existing.voltage, self.excursion_held),
-                    (reading.v, held),
-                ) {
+                if replaces_supply_voltage(self.excursion_held, held) {
                     existing.voltage = reading.v;
                     existing.peak_at = reading.at;
                     self.excursion_held = held;
@@ -1638,8 +1755,7 @@ impl SupplyWatch {
             (Some(ex), Some(ep)) => {
                 let mut merged = ex.clone();
                 let (reading, held) = ep.reading();
-                if replaces_supply_voltage((merged.voltage, self.excursion_held), (reading.v, held))
-                {
+                if replaces_supply_voltage(self.excursion_held, held) {
                     merged.voltage = reading.v;
                     merged.peak_at = reading.at;
                 }

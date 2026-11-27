@@ -706,7 +706,7 @@ fn atmega328p_operating_point_uses_reset_current() {
         .unwrap()["data"]["voltage"]
         .as_f64()
         .unwrap();
-    let snap_v = replies
+    let snap_diag = replies
         .iter()
         .rev()
         .find(|r| r["command"] == "snapshot")
@@ -715,15 +715,16 @@ fn atmega328p_operating_point_uses_reset_current() {
         .unwrap()
         .iter()
         .find(|d| d["code"] == "rating.supply_low")
-        .unwrap()["data"]["voltage"]
-        .as_f64()
         .unwrap();
+    let snap_v = snap_diag["data"]["voltage"].as_f64().unwrap();
+    let snap_over = snap_diag["data"]["over_ps"].as_u64().unwrap();
     assert!((open_v - 3.566).abs() < 0.05, "open_v={open_v}");
     assert!((snap_v - 3.566).abs() < 0.05, "snap_v={snap_v}");
     assert!(
         (open_v - snap_v).abs() < 1e-3,
         "open_v={open_v} vs snap_v={snap_v}"
     );
+    assert_eq!(snap_over, ps(200, 1), "snap_over={snap_over}");
 }
 
 /// SK6812 warns below its 3.7 V datasheet minimum when wired alone or externally on the DevKitC-1's
@@ -821,4 +822,231 @@ fn sk6812_warns_below_3v7_and_devkitc_accepts_only_its_onboard_led() {
         "{}",
         card.stdout
     );
+}
+
+/// Pins the four PR 309 meter-parity behaviors:
+/// 1. A slow rise that never reaches minimum tracks the rising rail instead of where it started.
+/// 2. A staircase reports each active plateau on snapshot and the dip's depth after recovery.
+/// 3. An oscillating rail prints identical numbers on the step line and the snapshot.
+/// 4. A flat low rail reports the exact elapsed duration rather than stopping at the last step.
+#[test]
+fn supply_low_tracks_most_recent_held_level_exact_duration_and_step_snapshot_parity() {
+    let supply_diag = |reply: &Value| -> Value {
+        reply["reply"]["data"]["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|d| d["code"] == "rating.supply_low")
+            .unwrap()
+            .clone()
+    };
+
+    // 1. Slow RC rise (2.2 V through 10 kohm into 10 uF) never reaches DHT22's 3.3 V minimum.
+    {
+        let dir = setup_project(json!({}), "", false);
+        let src = write_wave_part(dir.path(), "rc-rise-src", volts(2.2));
+        let scene = json!({
+            "format": 1,
+            "parts": {
+                "psu": { "type": src },
+                "u": { "type": "dht22" },
+                "rs": { "type": "resistor-axial", "resistance": "10k" },
+                "c": { "type": "capacitor-electrolytic-radial", "capacitance": "10u", "initial": "0V" }
+            },
+            "wires": [
+                ["psu.neg", "c.neg"],
+                ["psu.pos", "rs.a"],
+                ["rs.b", "c.pos"],
+                ["c.pos", "u.VDD"],
+                ["c.neg", "u.GND"]
+            ],
+            "ground": "u.GND",
+            "sim": { "max_step": "100us" }
+        });
+        fs::write(
+            dir.path().join("scene.jsonc"),
+            serde_json::to_string_pretty(&scene).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("tests/run.test"),
+            "open\nstep 5ms\nget @u.VDD\nsnapshot\nstep 45ms\nget @u.VDD\nsnapshot\nstep 250ms\nget @u.VDD\nsnapshot\nexpect diagnostics contains \"drops to 2.09 V\"\n",
+        )
+        .unwrap();
+        let run = orbe(dir.path(), &["test", "-v", "--json"]);
+        assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+        let doc: Value = serde_json::from_str(&run.stdout).unwrap();
+        let replies = doc["data"]["tests"][0]["replies"].as_array().unwrap();
+        let mut snaps = replies.iter().filter(|r| r["command"] == "snapshot");
+        let mut gets = replies.iter().filter(|r| r["command"] == "get @u.VDD");
+        for expected_text in ["drops to 0.113 V", "drops to 0.867 V", "drops to 2.09 V"] {
+            let get_v = gets.next().unwrap()["reply"]["data"]["value"]["v"]
+                .as_f64()
+                .unwrap();
+            let diag = supply_diag(snaps.next().unwrap());
+            let warn_v = diag["data"]["voltage"].as_f64().unwrap();
+            assert!(
+                (warn_v - get_v).abs() < 1e-3,
+                "warn_v={warn_v} vs get_v={get_v} ({diag})"
+            );
+            assert!(
+                diag["message"].as_str().unwrap().contains(expected_text),
+                "{diag}"
+            );
+        }
+    }
+
+    // 2. Staircase (5 -> 3.0 -> 2.5 -> 2.0 -> 5.0 V): each mid-plateau snapshot matches `get`,
+    //    and the recovered snapshot names 2 V for 15 ms.
+    {
+        let dir = setup_project(json!({}), "", false);
+        let src = write_wave_part(
+            dir.path(),
+            "stair",
+            json!({
+                "kind": "steps",
+                "initial": volts(5.0),
+                "events": [
+                    { "t_ps": ps(5, 0), "level": volts(3.0) },
+                    { "t_ps": ps(10, 0), "level": volts(2.5) },
+                    { "t_ps": ps(15, 0), "level": volts(2.0) },
+                    { "t_ps": ps(20, 0), "level": volts(5.0) }
+                ]
+            }),
+        );
+        let scene = json!({
+            "format": 1,
+            "parts": { "psu": { "type": src }, "u": { "type": "dht22" } },
+            "wires": [["psu.pos", "u.VDD"], ["psu.neg", "u.GND"]],
+            "ground": "u.GND"
+        });
+        fs::write(
+            dir.path().join("scene.jsonc"),
+            serde_json::to_string_pretty(&scene).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("tests/run.test"),
+            "open\nstep 7ms\nsnapshot\nstep 5ms\nsnapshot\nstep 5ms\nsnapshot\nstep 5ms\nsnapshot\nexpect diagnostics contains \"drops to 2 V\"\n",
+        )
+        .unwrap();
+        let run = orbe(dir.path(), &["test", "-v", "--json"]);
+        assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+        let doc: Value = serde_json::from_str(&run.stdout).unwrap();
+        let replies = doc["data"]["tests"][0]["replies"].as_array().unwrap();
+        let snaps: Vec<_> = replies
+            .iter()
+            .filter(|r| r["command"] == "snapshot")
+            .map(supply_diag)
+            .collect();
+        let expected = [
+            (3.0, ps(2, 0)),
+            (2.5, ps(7, 0)),
+            (2.0, ps(12, 0)),
+            (2.0, ps(15, 0)),
+        ];
+        assert_eq!(snaps.len(), expected.len());
+        for (diag, (want_v, want_over)) in snaps.iter().zip(expected) {
+            let v = diag["data"]["voltage"].as_f64().unwrap();
+            let over = diag["data"]["over_ps"].as_u64().unwrap();
+            assert!((v - want_v).abs() < 1e-6, "got {v}, want {want_v}: {diag}");
+            assert_eq!(over, want_over, "{diag}");
+        }
+    }
+
+    // 3. Oscillating rails: step line and snapshot print the exact same voltage and total duration.
+    for (tag, high, low, width_ns, period_ns, want_over_ps) in [
+        ("osc-fast", 3.5, 3.1, 400u64, 800u64, ps(1, 0)),
+        ("osc-900ns", 5.0, 2.0, 900u64, 4_000u64, ps(0, 450)),
+    ] {
+        let dir = setup_project(json!({}), "", false);
+        let src = write_wave_part(
+            dir.path(),
+            tag,
+            json!({
+                "kind": "pulse",
+                "initial": volts(high),
+                "pulsed": volts(low),
+                "delay_ps": ps(1, 0),
+                "width_ps": width_ns * 1_000,
+                "period_ps": period_ns * 1_000
+            }),
+        );
+        let scene = json!({
+            "format": 1,
+            "parts": { "psu": { "type": src }, "u": { "type": "dht22" } },
+            "wires": [["psu.pos", "u.VDD"], ["psu.neg", "u.GND"]],
+            "ground": "u.GND",
+            "sim": { "max_step": "50us" }
+        });
+        fs::write(
+            dir.path().join("scene.jsonc"),
+            serde_json::to_string_pretty(&scene).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("tests/run.test"),
+            "open\nstep 500us\nstep 2500us\nsnapshot\nexpect diagnostics contains \"rating.supply_low\"\n",
+        )
+        .unwrap();
+        let run = orbe(dir.path(), &["test", "-v", "--json"]);
+        assert_eq!(run.code, 0, "{tag}: {}{}", run.stdout, run.stderr);
+        let doc: Value = serde_json::from_str(&run.stdout).unwrap();
+        let replies = doc["data"]["tests"][0]["replies"].as_array().unwrap();
+        let step_diag = replies
+            .iter()
+            .find(|r| r["command"] == "step 2500us")
+            .unwrap()["reply"]["data"]["changes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["kind"] == "diagnostic" && c["diagnostic"]["code"] == "rating.supply_low")
+            .unwrap()["diagnostic"]
+            .clone();
+        let snap_diag = supply_diag(replies.iter().find(|r| r["command"] == "snapshot").unwrap());
+        assert_eq!(step_diag, snap_diag, "{tag}: step vs snapshot mismatch");
+        assert_eq!(
+            snap_diag["data"]["over_ps"].as_u64(),
+            Some(want_over_ps),
+            "{tag}: {snap_diag}"
+        );
+        assert!(
+            (snap_diag["data"]["voltage"].as_f64().unwrap() - low).abs() < 1e-6,
+            "{tag}: {snap_diag}"
+        );
+    }
+
+    // 4. Flat 2.0 V rail reports exact elapsed duration (0 at open, 4 ms at 4 ms, 10 ms at 10 ms).
+    {
+        let dir = setup_project(json!({}), "", false);
+        let src = write_wave_part(dir.path(), "dc2", volts(2.0));
+        let scene = json!({
+            "format": 1,
+            "parts": { "psu": { "type": src }, "u": { "type": "dht22" } },
+            "wires": [["psu.pos", "u.VDD"], ["psu.neg", "u.GND"]],
+            "ground": "u.GND"
+        });
+        fs::write(
+            dir.path().join("scene.jsonc"),
+            serde_json::to_string_pretty(&scene).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("tests/run.test"),
+            "open\nsnapshot\nstep 4ms\nsnapshot\nstep 6ms\nsnapshot\nexpect diagnostics contains \"for 10ms\"\n",
+        )
+        .unwrap();
+        let run = orbe(dir.path(), &["test", "-v", "--json"]);
+        assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+        let doc: Value = serde_json::from_str(&run.stdout).unwrap();
+        let replies = doc["data"]["tests"][0]["replies"].as_array().unwrap();
+        let snaps: Vec<_> = replies
+            .iter()
+            .filter(|r| r["command"] == "snapshot")
+            .map(supply_diag)
+            .collect();
+        assert_eq!(snaps[0]["data"]["over_ps"].as_u64(), Some(0));
+        assert_eq!(snaps[1]["data"]["over_ps"].as_u64(), Some(ps(4, 0)));
+        assert_eq!(snaps[2]["data"]["over_ps"].as_u64(), Some(ps(10, 0)));
+    }
 }
