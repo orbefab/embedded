@@ -81,6 +81,8 @@ BJT_CARD = (
     ("cje", "base_emitter_capacitance"),
     ("cjc", "base_collector_capacitance"),
 )
+# Optional BJT fields omitted from a card when absent so ngspice keeps its default.
+BJT_OPTIONAL_CARD = (("ikf", "forward_knee_current"),)
 # Level 1 parameters the netlist names. `l=w` and `is=0` are written on the device line and the card.
 # Capacitances are plain elements, so a default `tox` cannot add Meyer caps.
 MOS_CARD = (
@@ -168,7 +170,11 @@ def main(argv):
     if not targets:
         targets = [
             p.parent
-            for folder in ("packages/engine/tests/circuits", "packages/engine/tests/circuit/fixtures")
+            for folder in (
+                "packages/engine/tests/circuits",
+                "packages/engine/tests/circuit/fixtures",
+                "packages/engine/tests/circuit/catalog",
+            )
             for p in sorted((ROOT / folder).glob("*/netlist.json"))
         ]
     report = report_examples(targets, check, ngspice_version())
@@ -765,12 +771,15 @@ def translate_shape(title, netlist):
     zeners = any(p.get("kind") == "zener" for p in parts)
     regulators = any(p.get("kind") == "linear_regulator" for p in parts)
     junctions = any(p.get("kind") in ("diode", "led", "zener") for p in parts)
+    cap_esrs = any(p.get("kind") == "capacitor" and p.get("series_resistance") is not None for p in parts)
     if (transistors or has_inductor(netlist) or zeners or regulators) and any(
         n.lower().startswith("x_") for n in names
     ):
         raise Skip(
             "a deck with a transistor, an inductor, a zener or a linear regulator reserves names starting with x_"
         )
+    if cap_esrs and any(n.lower().startswith("x_") for n in names):
+        raise Skip("a capacitor with series_resistance reserves names starting with x_")
 
     def node(net):
         return "0" if net == ground else net.lower()
@@ -878,7 +887,11 @@ def translate_shape(title, netlist):
                 mapping[f"i(vx_{name}_{pin})"] = f"#{part['name']}.i{pin}"
                 mapping[f"v(x_{name}_{pin})"] = None
             lines.append(f"q{name} x_{name}_c x_{name}_b {e} qmod_{name}")
-            params = " ".join(f"{key}={number(part[field])}" for key, field in BJT_CARD)
+            card = [f"{key}={number(part[field])}" for key, field in BJT_CARD]
+            for key, field in BJT_OPTIONAL_CARD:
+                if part.get(field) is not None:
+                    card.append(f"{key}={number(part[field])}")
+            params = " ".join(card)
             lines.append(f".model qmod_{name} {kind} ({params} mje=0 mjc=0)")
         elif kind in MOS_KINDS:
             # Ammeters read the whole drain and gate pin currents, capacitors included.
@@ -905,9 +918,22 @@ def translate_shape(title, netlist):
                 a, b = cap_nodes[suffix]
                 lines.append(f"c{name}_{suffix} {a} {b} {number(part[field])}")
         elif kind == "capacitor":
-            lines.append(f"c{name} {pins} {number(part['capacitance'])}")
-            if part["initial"] is not None:
-                lines.append(initial_condition(part, ground, node, transient))
+            esr = capacitor_esr(part)
+            if esr is None:
+                lines.append(f"c{name} {pins} {number(part['capacitance'])}")
+                if part["initial"] is not None:
+                    lines.append(initial_condition(part, ground, node, transient))
+            else:
+                a, b = (node(net) for net in pin_list)
+                lines.append(f"rx_{name}_s {a} x_{name} {esr!r}")
+                lines.append(f"c{name} x_{name} {b} {number(part['capacitance'])}")
+                mapping[f"v(x_{name})"] = None
+                if part["initial"] is not None:
+                    if not transient:
+                        raise Skip("a held capacitor is translated only for a transient analysis")
+                    if part["pins"]["b"] != ground:
+                        raise Skip("a held capacitor with series_resistance needs pin b on ground")
+                    lines.append(f".ic v(x_{name})={float(part['initial']['value'])!r}")
             saves.append(f"@c{name}[i]")
             mapping[f"i(@c{name}[i])"] = ref
         elif kind == "inductor":
@@ -955,18 +981,25 @@ def translate_shape(title, netlist):
             latches.append(f"v(x_{name}_q)")
         else:
             raise Skip(f"kind {kind} has no translation")
+    esr_nodes = [
+        f"x_{p['name'].lower()}"
+        for p in parts
+        if p.get("kind") == "capacitor" and p.get("series_resistance") is not None
+    ]
     if latches:
         lines.append("* The engine's gmin on every node. A chip's ladder holds CONT flat, with no span to hide it.")
-        shunted = [node(net) for net in nets if net != ground] + [
-            f"x_{p['name'].lower()}_lo" for p in parts if p["kind"] in CHIPS
-        ]
+        shunted = (
+            [node(net) for net in nets if net != ground]
+            + [f"x_{p['name'].lower()}_lo" for p in parts if p["kind"] in CHIPS]
+            + esr_nodes
+        )
         lines += [f"rx_gmin_{n} {n} 0 {1 / ENGINE_GMIN!r}" for n in shunted]
     elif transistors or junctions or regulators:
         if regulators and not (transistors or junctions):
             lines.append("* The engine's gmin on every external node. The regulator's internal nodes are not shunted.")
         else:
             lines.append("* The engine's gmin on every node, beside the gmin ngspice puts across each junction.")
-        shunted = [node(net) for net in nets if net != ground]
+        shunted = [node(net) for net in nets if net != ground] + esr_nodes
         lines += [f"rx_gmin_{n} {n} 0 {1 / ENGINE_GMIN!r}" for n in shunted]
     if not transient:
         reject_duplicate_devices(lines)
@@ -1077,6 +1110,19 @@ def relay_lines(name, part, node):
         f"sx_{name}_nc {com} {nc} x_{name}_m 0 swnc_{name}",
         f".model swnc_{name} sw ({hysteresis} ron={off} roff={on})",
     ]
+
+
+def capacitor_esr(part):
+    """The capacitor's series resistance in ohms, or None when absent."""
+    esr = part.get("series_resistance")
+    if esr is None:
+        return None
+    if "value" in esr:
+        return float(esr["value"])
+    tan_delta = float(esr["tan_delta"]["value"])
+    frequency = float(esr["frequency"]["value"])
+    farad = float(part["capacitance"]["value"])
+    return tan_delta / (2.0 * math.pi * frequency * farad)
 
 
 def initial_condition(part, ground, node, transient):

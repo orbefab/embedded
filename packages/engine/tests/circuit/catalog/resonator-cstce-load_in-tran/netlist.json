@@ -1,0 +1,67 @@
+{
+  "version": 1,
+  "seed": 0,
+  "analysis": {
+    "transient": {
+      "stop_ps": 75000000,
+      "max_step_ps": 750000,
+      "grid_ps": 750000
+    }
+  },
+  "ground": "gnd",
+  "nets": [
+    "gnd",
+    "vin",
+    "vc"
+  ],
+  "parts": [
+    {
+      "name": "v1",
+      "kind": "voltage_source",
+      "pins": {
+        "p": "vin",
+        "n": "gnd"
+      },
+      "voltage": {
+        "kind": "step",
+        "initial": {
+          "value": 0.0,
+          "unit": "V"
+        },
+        "final": {
+          "value": 5.0,
+          "unit": "V"
+        },
+        "at_ps": 7500000
+      }
+    },
+    {
+      "name": "r1",
+      "kind": "resistor",
+      "pins": {
+        "a": "vin",
+        "b": "vc"
+      },
+      "resistance": {
+        "value": 1000000.0,
+        "unit": "ohm"
+      },
+      "ratings": {
+        "power": null
+      }
+    },
+    {
+      "name": "c1",
+      "kind": "capacitor",
+      "pins": {
+        "a": "vc",
+        "b": "gnd"
+      },
+      "capacitance": {
+        "value": 1.5e-11,
+        "unit": "F"
+      },
+      "initial": null
+    }
+  ]
+}

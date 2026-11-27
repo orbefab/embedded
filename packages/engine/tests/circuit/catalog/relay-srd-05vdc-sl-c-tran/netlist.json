@@ -1,0 +1,150 @@
+{
+  "version": 1,
+  "seed": 0,
+  "analysis": {
+    "transient": {
+      "stop_ps": 15000000000,
+      "max_step_ps": 100000000,
+      "grid_ps": 100000000
+    }
+  },
+  "ground": "gnd",
+  "nets": [
+    "gnd",
+    "vcc",
+    "coil",
+    "no",
+    "nc"
+  ],
+  "parts": [
+    {
+      "name": "vcc",
+      "kind": "voltage_source",
+      "pins": {
+        "p": "vcc",
+        "n": "gnd"
+      },
+      "voltage": {
+        "value": 5.0,
+        "unit": "V"
+      }
+    },
+    {
+      "name": "sw1",
+      "kind": "switch",
+      "pins": {
+        "a": "coil",
+        "b": "gnd"
+      },
+      "on_resistance": {
+        "value": 0.1,
+        "unit": "ohm"
+      },
+      "off_resistance": {
+        "value": 100000000.0,
+        "unit": "ohm"
+      },
+      "initial": "open",
+      "events": [
+        {
+          "t_ps": 1000000000,
+          "state": "closed"
+        },
+        {
+          "t_ps": 7000000000,
+          "state": "open"
+        }
+      ],
+      "bounce": null
+    },
+    {
+      "name": "d1",
+      "pins": {
+        "anode": "coil",
+        "cathode": "vcc"
+      },
+      "kind": "diode",
+      "saturation_current": {
+        "value": 9.4334e-08,
+        "unit": "A"
+      },
+      "emission_coefficient": {
+        "value": 2.0844,
+        "unit": "1"
+      },
+      "series_resistance": {
+        "value": 0.0317,
+        "unit": "ohm"
+      },
+      "ratings": {
+        "current": null,
+        "power": null
+      }
+    },
+    {
+      "name": "k1",
+      "kind": "relay",
+      "pins": {
+        "coil_a": "vcc",
+        "coil_b": "coil",
+        "com": "vcc",
+        "no": "no",
+        "nc": "nc"
+      },
+      "coil_resistance": {
+        "value": 70,
+        "unit": "ohm"
+      },
+      "inductance": {
+        "value": 0.07,
+        "unit": "H"
+      },
+      "pull_in_current": {
+        "value": 0.05357142857142857,
+        "unit": "A"
+      },
+      "drop_out_current": {
+        "value": 0.007142857142857143,
+        "unit": "A"
+      },
+      "on_resistance": {
+        "value": 0.1,
+        "unit": "ohm"
+      },
+      "off_resistance": {
+        "value": 100000000.0,
+        "unit": "ohm"
+      }
+    },
+    {
+      "name": "rno",
+      "kind": "resistor",
+      "pins": {
+        "a": "no",
+        "b": "gnd"
+      },
+      "resistance": {
+        "value": 1000.0,
+        "unit": "ohm"
+      },
+      "ratings": {
+        "power": null
+      }
+    },
+    {
+      "name": "rnc",
+      "kind": "resistor",
+      "pins": {
+        "a": "nc",
+        "b": "gnd"
+      },
+      "resistance": {
+        "value": 2200.0,
+        "unit": "ohm"
+      },
+      "ratings": {
+        "power": null
+      }
+    }
+  ]
+}

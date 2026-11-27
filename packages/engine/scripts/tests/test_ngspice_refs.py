@@ -300,6 +300,7 @@ def test_decks_grid_and_bounce():
         nmos_deck(refs),
         pmos_deck(refs),
         inductor_deck(refs),
+        capacitor_esr_deck(refs),
         corner_check(refs),
         relay_deck(refs),
         contact_edges(refs),
@@ -307,6 +308,7 @@ def test_decks_grid_and_bounce():
         bounce_vectors(),
         vcd_reader(refs),
         engine_grid(refs),
+        catalog_sweep_coverage(),
     ]
     for case in cases:
         assert case["ok"], case
@@ -1114,6 +1116,11 @@ def transistor_deck(refs):
     ok = ok and op["#Q1.p"] == 5.0 * 0.01 + 0.7 * 1e-4
     ok = ok and op["#q2.p"] == (0.0 - 2.0) * -0.02 + (0.7 - 2.0) * -2e-4
     ok = ok and not any(key.endswith(".v") for key in op)
+    # Optional `forward_knee_current` translates to `ikf` on the BJT model card.
+    knee_part = {**bjt("Q1", "npn", "C", "b", "gnd"), "forward_knee_current": {"value": 0.57}}
+    knee_text, _ = refs.translate("bjt-ikf", {**netlist, "parts": [knee_part]})
+    want_knee = f".model qmod_q1 npn ({card.replace(' mje=0 mjc=0', '')} ikf=0.57 mje=0 mjc=0)"
+    ok = ok and want_knee in knee_text.splitlines()
     return {"name": "transistor deck", "ok": ok}
 
 
@@ -1250,6 +1257,60 @@ def inductor_deck(refs):
     ok = ok and text.splitlines()[1] == f".options {refs.OPTIONS}"
     ok = ok and refs.deck_options(rl_netlist({"op": {}})) == refs.OPTIONS
     return {"name": "inductor deck", "ok": ok}
+
+
+def capacitor_esr_deck(refs):
+    """A capacitor with direct ohms or tan_delta series_resistance splits into rx_<name>_s and c<name>."""
+    import math
+
+    direct = {
+        "analysis": {"op": {}},
+        "ground": "gnd",
+        "nets": ["gnd", "a"],
+        "parts": [
+            {
+                "name": "c1",
+                "kind": "capacitor",
+                "pins": {"a": "a", "b": "gnd"},
+                "capacitance": {"value": 1e-5},
+                "initial": None,
+                "series_resistance": {"value": 3.0},
+            }
+        ],
+    }
+    text, mapping = refs.translate("cap-esr", direct)
+    lines = text.splitlines()
+    ok = "rx_c1_s a x_c1 3.0" in lines and "cc1 x_c1 0 1e-05" in lines
+    ok = ok and mapping["i(@cc1[i])"] == "#c1.i" and mapping["v(x_c1)"] is None
+    loss = {
+        **direct,
+        "parts": [
+            {
+                **direct["parts"][0],
+                "series_resistance": {"tan_delta": {"value": 0.2}, "frequency": {"value": 120.0}},
+            }
+        ],
+    }
+    loss_text, _ = refs.translate("cap-loss", loss)
+    expected_esr = 0.2 / (2.0 * math.pi * 120.0 * 1e-5)
+    ok = ok and f"rx_c1_s a x_c1 {expected_esr!r}" in loss_text.splitlines()
+    reserved = {**direct, "nets": ["gnd", "x_c1"], "parts": [{**direct["parts"][0], "pins": {"a": "x_c1", "b": "gnd"}}]}
+    try:
+        refs.translate("cap-res", reserved)
+    except refs.Skip as skip:
+        ok = ok and str(skip) == "a capacitor with series_resistance reserves names starting with x_"
+    else:
+        ok = False
+    return {"name": "capacitor esr deck", "ok": ok}
+
+
+def catalog_sweep_coverage():
+    """Every part in parts/ is covered or explicitly excluded, and committed catalog netlists match."""
+    import catalog_sweep
+
+    report = catalog_sweep.check_catalog()
+    ok = report["drift"] == [] and report["circuits"] > 0 and report["parameter_sets"] > 0
+    return {"name": "catalog sweep coverage", "ok": ok, **report}
 
 
 def corner_check(refs):

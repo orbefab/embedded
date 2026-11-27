@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "seed": 0,
+  "analysis": {
+    "op": {}
+  },
+  "ground": "gnd",
+  "nets": [
+    "gnd",
+    "vcc",
+    "w"
+  ],
+  "parts": [
+    {
+      "name": "v1",
+      "kind": "voltage_source",
+      "pins": {
+        "p": "vcc",
+        "n": "gnd"
+      },
+      "voltage": {
+        "value": 5.0,
+        "unit": "V"
+      }
+    },
+    {
+      "name": "rv1",
+      "kind": "potentiometer",
+      "pins": {
+        "a": "vcc",
+        "wiper": "w",
+        "b": "gnd"
+      },
+      "resistance": {
+        "value": 10000,
+        "unit": "ohm"
+      },
+      "position": {
+        "value": 0.9,
+        "unit": "1"
+      }
+    },
+    {
+      "name": "rl",
+      "kind": "resistor",
+      "pins": {
+        "a": "w",
+        "b": "gnd"
+      },
+      "resistance": {
+        "value": 10000.0,
+        "unit": "ohm"
+      },
+      "ratings": {
+        "power": null
+      }
+    }
+  ]
+}

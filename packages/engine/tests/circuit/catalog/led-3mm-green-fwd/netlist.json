@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "seed": 0,
+  "analysis": {
+    "op": {}
+  },
+  "ground": "gnd",
+  "nets": [
+    "gnd",
+    "vin",
+    "va"
+  ],
+  "parts": [
+    {
+      "name": "v1",
+      "kind": "voltage_source",
+      "pins": {
+        "p": "vin",
+        "n": "gnd"
+      },
+      "voltage": {
+        "value": 5.0,
+        "unit": "V"
+      }
+    },
+    {
+      "name": "r1",
+      "kind": "resistor",
+      "pins": {
+        "a": "vin",
+        "b": "va"
+      },
+      "resistance": {
+        "value": 220.0,
+        "unit": "ohm"
+      },
+      "ratings": {
+        "power": null
+      }
+    },
+    {
+      "name": "d1",
+      "kind": "led",
+      "pins": {
+        "anode": "va",
+        "cathode": "gnd"
+      },
+      "saturation_current": {
+        "value": 1.209e-23,
+        "unit": "A"
+      },
+      "emission_coefficient": {
+        "value": 1.476,
+        "unit": "1"
+      },
+      "series_resistance": {
+        "value": 17.37,
+        "unit": "ohm"
+      },
+      "ratings": {
+        "current": null,
+        "power": null
+      }
+    }
+  ]
+}

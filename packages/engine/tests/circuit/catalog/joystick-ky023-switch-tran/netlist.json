@@ -1,0 +1,74 @@
+{
+  "version": 1,
+  "seed": 0,
+  "analysis": {
+    "transient": {
+      "stop_ps": 10000000,
+      "max_step_ps": 100000,
+      "grid_ps": 100000
+    }
+  },
+  "ground": "gnd",
+  "nets": [
+    "gnd",
+    "vcc",
+    "out"
+  ],
+  "parts": [
+    {
+      "name": "v1",
+      "kind": "voltage_source",
+      "pins": {
+        "p": "vcc",
+        "n": "gnd"
+      },
+      "voltage": {
+        "value": 5.0,
+        "unit": "V"
+      }
+    },
+    {
+      "name": "sw1",
+      "kind": "switch",
+      "pins": {
+        "a": "vcc",
+        "b": "out"
+      },
+      "on_resistance": {
+        "value": 0.1,
+        "unit": "ohm"
+      },
+      "off_resistance": {
+        "value": 100000000.0,
+        "unit": "ohm"
+      },
+      "initial": "open",
+      "events": [
+        {
+          "t_ps": 1000000,
+          "state": "closed"
+        },
+        {
+          "t_ps": 5000000,
+          "state": "open"
+        }
+      ],
+      "bounce": null
+    },
+    {
+      "name": "rl",
+      "kind": "resistor",
+      "pins": {
+        "a": "out",
+        "b": "gnd"
+      },
+      "resistance": {
+        "value": 1000.0,
+        "unit": "ohm"
+      },
+      "ratings": {
+        "power": null
+      }
+    }
+  ]
+}

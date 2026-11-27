@@ -161,6 +161,7 @@ engine_python() {
   uv run --project packages/engine/scripts --frozen pytest --rootdir=packages/engine/scripts packages/engine/scripts/tests
   uv run packages/engine/scripts/st77916_example.py --check
   uv run packages/engine/scripts/pattern_header.py --check
+  uv run packages/engine/scripts/catalog_sweep.py --check
   uv run packages/engine/scripts/ngspice_refs.py --check
   run_check st77916-replay render_st77916.py packages/engine/tests/circuits/st77916-replay/events.json
   run_check esp32s3-blink esp32s3_blink.py

@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "seed": 0,
+  "analysis": {
+    "op": {}
+  },
+  "ground": "gnd",
+  "nets": [
+    "gnd",
+    "cell",
+    "vout"
+  ],
+  "parts": [
+    {
+      "name": "cell",
+      "kind": "voltage_source",
+      "pins": {
+        "p": "cell",
+        "n": "gnd"
+      },
+      "voltage": {
+        "value": 6.0,
+        "unit": "V"
+      }
+    },
+    {
+      "name": "r_int",
+      "kind": "resistor",
+      "pins": {
+        "a": "cell",
+        "b": "vout"
+      },
+      "resistance": {
+        "value": 0.9,
+        "unit": "ohm"
+      },
+      "ratings": {
+        "power": null
+      }
+    },
+    {
+      "name": "rl",
+      "kind": "resistor",
+      "pins": {
+        "a": "vout",
+        "b": "gnd"
+      },
+      "resistance": {
+        "value": 100.0,
+        "unit": "ohm"
+      },
+      "ratings": {
+        "power": null
+      }
+    }
+  ]
+}
