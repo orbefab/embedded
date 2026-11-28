@@ -387,14 +387,16 @@ impl Station {
 
 /// The CCMP AAD of a Data frame (12.5.3.3.3): its Frame Control with Retry, Power Management
 /// and More Data masked, its addresses, and its Sequence Control's fragment number.
-fn aad(mpdu: &[u8]) -> Vec<u8> {
+pub(crate) fn aad(mpdu: &[u8]) -> Vec<u8> {
     let mut aad = vec![mpdu[0] & 0x8f, mpdu[1] & !0x38];
     aad.extend(&mpdu[4..22]);
     aad.extend([mpdu[22] & 0x0f, 0]);
     aad
 }
 
-fn nonce(a2: [u8; 6], pn: u64) -> Vec<u8> {
+/// The CCMP nonce of a Data frame with no QoS Control (12.5.3.3.4): priority 0, Address 2 and the
+/// PN.
+pub(crate) fn nonce(a2: [u8; 6], pn: u64) -> Vec<u8> {
     let mut nonce = vec![0];
     nonce.extend(a2);
     nonce.extend(&pn.to_be_bytes()[2..]);

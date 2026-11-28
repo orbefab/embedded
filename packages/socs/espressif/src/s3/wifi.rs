@@ -36,16 +36,19 @@
 //!
 //! The join after the scan touches more, from `hal_crypto_*`, `hal_tsf`, `hal_coex`,
 //! `ic_update_sta_tsf`, `pm_update_next_tbtt` and the ROM's `coex_hw_timer_*`, and each meaning
-//! is a guess: the key table is storage ([`KEYS`]), a TSF load sets a timer and a TBTT latch
-//! sets a TBTT's start ([`TSF_CONTROL`]), and the MAC's clock counts microseconds
-//! ([`MAC_CLOCK`]). What the model does not run is refused by name: a frame the MAC would
-//! encrypt or decrypt with the key table (`tx_protected`, `rx_protected`), a coexistence timer
-//! turned on (`coex_timer`), the beacon filter turned on (`beacon_filter`), the interrupt of a
-//! TBTT other than 0 or of a TSF timer's alarm (`tbtt_intr`, `tsf_timer`), any bit of the TSF
-//! and TBTT words that no blob function sets (`tsf_control`, `tbtt_control`, `tbtt_start`,
-//! `pwr_intr`), and an armed TBTT, where the run ends as `tbtt` ([`Radio::tbtt`]). The driver
-//! itself numbers each frame and sets its Retry bit when it sends it again after an ACK timeout,
-//! so the MAC sends the buffer as it is.
+//! is a guess: the MAC encrypts and decrypts CCMP-128 with the key table, as [`keys`] says, a
+//! TSF load sets a timer and a TBTT latch sets a TBTT's start ([`TSF_CONTROL`]), and the MAC's
+//! clock counts microseconds ([`MAC_CLOCK`]). What the model does not run is refused by name: a
+//! cipher other than CCMP-128, a protected Management frame, a coexistence timer turned on or
+//! forced (`coex_timer`, `coex_force`), the beacon filter turned on (`beacon_filter`), the
+//! interrupt of a TBTT other than 0 or of a TSF timer's alarm (`tbtt_intr`, `tsf_timer`), any bit
+//! of the TSF and TBTT words that no blob function sets (`tsf_control`, `tbtt_control`,
+//! `tbtt_start`, `pwr_intr`), any store to the key table, its crypto words, PLCP1, the beacon
+//! filter or a coexistence timer that no blob function makes (`key_entry`, `key_valid`,
+//! `crypto_control`, `crypto_init`, `tx_plcp1`, `beacon_filter_bits`, `coex_timer_bits`), and an
+//! armed TBTT, where the run ends as `tbtt` ([`Radio::tbtt`]). The driver itself numbers each
+//! frame and sets its Retry bit when it sends it again after an ACK timeout, so the MAC sends the
+//! buffer as it is.
 //!
 //! Any other access in these blocks is refused or listed as on a chip with no radio.
 
@@ -54,6 +57,7 @@ use std::sync::Arc;
 use orbe_model::air::{Ack, Mcs, Ofdm, Preamble, Rate};
 
 use super::clock::{TICK_HZ, Tick};
+use super::keys::{self, Opened, Sealed};
 
 /// The words kept, sorted.
 const WORDS: [u32; 289] = [
@@ -397,12 +401,27 @@ const STRIDE: u32 = 0x4c;
 const PLCP1_LENGTH: u32 = 0xfff;
 const PLCP1_RATE_SHIFT: u32 = 12;
 const PLCP1_RATE: u32 = 0x1f;
+/// The bits of a PLCP1 word that `mac_tx_set_plcp1` sets beyond the length, the rate and the key
+/// entry ([`keys::PLCP1_SHIFT`]): bit 25 with a rate from 16 to 31, an HT MCS, and bit 29 when
+/// two flags of the driver's frame are set, which `mac_tx_set_htsig` clears again for an HT
+/// frame. That bit 25 marks an HT rate, and that bit 29 changes nothing the model sends, are
+/// guesses. A rate of 16 or more without bit 25 comes from a rate code above 31, which the model
+/// does not run, `tx_rate`. No function sets bits 26 to 28, 30 or 31, or bit 25 with a rate below
+/// 16, and a store that does is refused by name, `tx_plcp1`.
+const PLCP1_HT: u32 = 1 << 25;
+const PLCP1_BITS: u32 = 0x23ff_ffff;
+const HT_RATES: u32 = 0x10;
 /// Queue 0's status word, which `hal_mac_get_txq_pmd` reads. Bits 12 to 15 are the outcome that
 /// `lmacProcessTxComplete` dispatches on: 0 runs `lmacProcessTxSuccess` and 5
 /// `lmacProcessAckTimeout`. Every other bit reads 0, a guess.
 const TX_STATUS: u32 = 0x6003_4320;
 const TX_SUCCESS: u32 = 0;
 const TX_ACK_TIMEOUT: u32 = 5 << 12;
+/// The outcome of a protected frame whose key entry is not in use: outcome 4, which
+/// `lmacProcessTxComplete` hands to `lmacProcessTxError` with bits 0 to 7, and 192 there, which
+/// `lmacProcessTxError` hands to `lmacProcessTxseckiderr`. That the MAC reports it for an entry
+/// not in use, sends nothing and is done when the frame would have started is a guess.
+const TX_KEY_ERROR: u32 = 4 << 12 | 0xc0;
 /// The MAC's event bits, which `hal_mac_interrupt_get_event` reads and `wDev_ProcessFiq`
 /// dispatches on, the bits a store to [`EVENTS_CLEAR`] clears, and the word whose bits let an
 /// event raise the interrupt. `hal_enable_mac` writes the last, which carries
@@ -502,12 +521,24 @@ const TSF_LOW: u32 = 0x6003_5018;
 const TSF_HIGH: u32 = 0x6003_501c;
 
 /// The coexistence timers' control words, timer `n`'s at [`COEX_TIMERS`] `+ 8 n`, as the ROM's
-/// `coex_hw_timer_set`, `coex_hw_timer_enable` and `coex_hw_timer_disable` write them. Bit 31 runs
-/// the timer to the alarm `coex_hw_timer_set` writes into the next word from [`MAC_CLOCK`]. The
-/// alarm is not modelled: a store that sets bit 31 is refused by name, `coex_timer`.
+/// `coex_hw_timer_set`, `coex_hw_timer_enable` and `coex_hw_timer_disable` and libcoexist's
+/// `coex_hw_timer_force` and `coex_hw_timer_unforce` write them. Bit 31 runs the timer to the
+/// alarm `coex_hw_timer_set` writes into the next word from [`MAC_CLOCK`]. The alarm is not
+/// modelled: a store that sets bit 31 is refused by name, `coex_timer`. Bit 28 forces the timer's
+/// signal, which is not modelled either, `coex_force`. `coex_hw_timer_set` writes bits 0 to 23, a
+/// 4-bit field in bits 24 to 27 and bit 30, which do nothing while the timer does not run. No
+/// function sets bit 29, and a store that does is refused by name, `coex_timer_bits`.
 const COEX_TIMERS: u32 = 0x6003_50a8;
 const COEX_TIMER_COUNT: u32 = 4;
 const COEX_TIMER_ON: u32 = 1 << 31;
+const COEX_TIMER_FORCE: u32 = 1 << 28;
+const COEX_TIMER_UNSET: u32 = 1 << 29;
+
+/// Whether `mac_tx_set_plcp1` writes a PLCP1 word with `value`'s bits.
+fn plcp1(value: u32) -> bool {
+    let code = (value >> PLCP1_RATE_SHIFT) & PLCP1_RATE;
+    value & !PLCP1_BITS == 0 && (value & PLCP1_HT == 0 || code >= HT_RATES)
+}
 
 /// Whether `addr` is a coexistence timer's control word.
 fn coex_timer(addr: u32) -> bool {
@@ -562,29 +593,35 @@ const TU: u64 = 1024;
 /// to 2, with event bit 15 in [`EVENTS_ENABLE`], and `hal_disable_sta_beacon_filter` off. The
 /// filter, which by `hal_beacon_ie_crc_get` and `hal_beacon_ie_crc_set` compares a CRC of each
 /// beacon's elements, is not modelled: a store that turns it on is refused by name,
-/// `beacon_filter`.
+/// `beacon_filter`. No function sets bits 3 to 31, and a store that does is refused by name,
+/// `beacon_filter_bits`.
 const BEACON_FILTER: u32 = 0x6003_30a0;
 const BEACON_FILTER_ON: u32 = 0x7;
 
-/// The key table: [`KEY_ENTRIES`] entries of [`KEY_WORDS`] words from [`KEYS`], as
+/// The key table: [`keys::ENTRIES`] entries of [`keys::WORDS`] words from [`keys::KEYS`], as
 /// `hal_crypto_set_key_entry` writes entry `n` at `KEYS + 40 n` and `hal_crypto_clr_key_entry`
-/// clears it, and the kept word `0x6003_3814`, whose bit `n` those two set and clear and
+/// clears it, and the kept word [`keys::VALID`], whose bit `n` those two set and clear and
 /// `hal_crypto_is_key_valid` reads. `wDev_remove_KeyEntry_all_cnx` walks entries 0 to 24 and
-/// `hal_crypto_init` ORs 25 into `0x6003_3840`. The words are plain storage that read the last
-/// write, 0 before it, a guess. As `hal_crypto_set_key_entry` and `hal_crypto_get_key_entry`
-/// lay them out, word 0 holds bytes 0 to 3 of the peer's MAC, word 1 bytes 4 and 5 in bits 0 to
-/// 15, the cipher in bits 18 to 20, the interface in bits 24 and 25 and the key ID in bits 30
-/// and 31, and words 2 to 9 the key. The MAC does not yet encrypt or decrypt with them: a frame
-/// that would need it is refused by name, `tx_protected` or `rx_protected`.
-const KEYS: u32 = 0x6003_4400;
-const KEY_ENTRIES: usize = 25;
-const KEY_WORDS: usize = 10;
+/// `hal_crypto_init` ORs 25 into `0x6003_3840`. The words read the last write, 0 before it, a
+/// guess. [`keys`] lays them out, says how the MAC uses them, and names the stores the blobs
+/// never make, which are refused ([`keys::refused`]).
+const KEY_TABLE: usize = keys::ENTRIES * keys::WORDS;
 
 /// The key table's word at `addr`, by its index in [`Radio::keys`].
 fn key_slot(addr: u32) -> Option<usize> {
-    let at = addr.checked_sub(KEYS)? as usize / 4;
-    (addr.is_multiple_of(4) && at < KEY_ENTRIES * KEY_WORDS).then_some(at)
+    let at = addr.checked_sub(keys::KEYS)? as usize / 4;
+    (addr.is_multiple_of(4) && at < KEY_TABLE).then_some(at)
 }
+
+/// `rx_ctrl`'s `rx_state`, bits 24 to 31 of word 11, for a protected frame the MAC kept as it
+/// came: no key entry takes it, or its MIC fails. `wDev_ProcessRxSucData` and `ppRxPkt` drop a
+/// frame whose `rx_state` is neither 0 nor 245, and hand one with 245 to the TKIP Michael MIC
+/// failure callback (`wpa_michael_mic_failure`, "TKIP MIC failure occur"). `wDev_RxSecError`
+/// counts 225 to 230 and 240 to 252 as security errors. Which of them the MAC writes for these
+/// two is a guess: two of the security errors that are not 245, so the driver drops the frame.
+const RX_NO_KEY: u32 = 0xf0;
+const RX_MIC_FAILURE: u32 = 0xf1;
+const RX_STATE_SHIFT: u32 = 24;
 
 /// The microseconds from the chip's start to `now`, the unit IEEE 802.11-2020 counts the TSF in
 /// (11.1.3.1). Every TSF timer counts it until a load: the origin, and that the four timers
@@ -630,7 +667,7 @@ pub(crate) struct Radio {
     /// Each TBTT's start, from its last latch.
     tbtt_start: [u32; TSF_TIMERS],
     /// The key table's words.
-    keys: [u32; KEY_ENTRIES * KEY_WORDS],
+    keys: [u32; KEY_TABLE],
     /// While TBTT 0 would raise the power interrupt, when its settings last changed: the store
     /// that armed it, or a later one that latched its start, set its timing or loaded timer 0.
     tbtt_since: Option<Tick>,
@@ -681,6 +718,8 @@ struct Pending {
     /// Whether it waits for an ACK.
     waits: bool,
     acked: bool,
+    /// The outcome the MAC reports whatever the ACK, for a frame it did not send.
+    outcome: Option<u32>,
 }
 
 /// What a store to the radio did.
@@ -712,7 +751,7 @@ impl Radio {
             tsf_latched: 0,
             tsf_offset: [0; TSF_TIMERS],
             tbtt_start: [0; TSF_TIMERS],
-            keys: [0; KEY_ENTRIES * KEY_WORDS],
+            keys: [0; KEY_TABLE],
             tbtt_since: None,
         }
     }
@@ -775,13 +814,16 @@ impl Radio {
     ) -> Store {
         if let Some(at) = key_slot(addr) {
             self.keys[at] = value;
-            return Store::Kept;
+            return keys::refused(addr, value).map_or(Store::Kept, Store::Refused);
         }
         let Some(slot) = Self::slot(addr) else {
             return Store::Unkept;
         };
         self.settle(now);
         let kept = std::mem::replace(&mut self.words[slot], value);
+        if let Some(setting) = keys::refused(addr, value) {
+            return Store::Refused(setting);
+        }
         let starts = |bit: u32| value & bit != 0 && kept & bit == 0;
         match addr {
             EVENTS_CLEAR => self.events &= !value,
@@ -791,10 +833,22 @@ impl Radio {
             RX_RELOAD if value & RX_RELOAD_START != 0 && self.rx_next == 0 && self.rx_last != 0 => {
                 self.rx_next = read_word(self.rx_last + 8, &byte).unwrap_or(0);
             }
+            BEACON_FILTER if value & !BEACON_FILTER_ON != 0 => {
+                return Store::Refused("beacon_filter_bits");
+            }
             BEACON_FILTER if value & BEACON_FILTER_ON != 0 => {
                 return Store::Refused("beacon_filter");
             }
+            _ if coex_timer(addr) && value & COEX_TIMER_UNSET != 0 => {
+                return Store::Refused("coex_timer_bits");
+            }
             _ if coex_timer(addr) && starts(COEX_TIMER_ON) => return Store::Refused("coex_timer"),
+            _ if coex_timer(addr) && starts(COEX_TIMER_FORCE) => {
+                return Store::Refused("coex_force");
+            }
+            _ if Self::queue(addr, PLCP1, STRIDE).is_some() && !plcp1(value) => {
+                return Store::Refused("tx_plcp1");
+            }
             PWR_ENABLE if value & !PWR_BITS != 0 => return Store::Refused("pwr_intr"),
             PWR_ENABLE if value & PWR_TBTT_OTHERS != 0 => return Store::Refused("tbtt_intr"),
             PWR_ENABLE if value & PWR_TSF_TIMERS != 0 => return Store::Refused("tsf_timer"),
@@ -833,38 +887,63 @@ impl Radio {
         };
         match Self::queue(addr, PLCP0, 8) {
             Some(queue) if starts(PLCP0_START) => match self.send(now, queue, value, byte) {
-                Ok(()) => Store::Sent,
+                Ok(true) => Store::Sent,
+                Ok(false) => Store::Kept,
                 Err(setting) => Store::Refused(setting),
             },
             _ => Store::Kept,
         }
     }
 
-    /// Puts queue `queue`'s frame on the air, from the store at `now` of `plcp0`.
+    /// Puts queue `queue`'s frame on the air, from the store at `now` of `plcp0`, and whether
+    /// it did: a protected frame without its key entry is done without going on the air.
     fn send(
         &mut self,
         now: Tick,
         queue: u32,
         plcp0: u32,
         byte: impl Fn(u32) -> Option<u8>,
-    ) -> Result<(), &'static str> {
+    ) -> Result<bool, &'static str> {
         if self.airing.is_some() || self.pending.is_some() {
             return Err("tx_busy");
         }
         let channel = self.channel.ok_or("tx_channel")?;
         let plcp1 = self.word(PLCP1 - STRIDE * queue);
-        let rate = rate((plcp1 >> PLCP1_RATE_SHIFT) & PLCP1_RATE).ok_or("tx_rate")?;
+        let code = (plcp1 >> PLCP1_RATE_SHIFT) & PLCP1_RATE;
+        if (plcp1 & PLCP1_HT != 0) != (code >= HT_RATES) {
+            return Err("tx_rate");
+        }
+        let rate = rate(code).ok_or("tx_rate")?;
         let length = (plcp1 & PLCP1_LENGTH) as usize;
         let psdu = gather(SRAM_DATA | plcp0 & PLCP0_DESCRIPTOR, byte).ok_or("tx_descriptor")?;
         // An MPDU holds at least Frame Control, Duration and Address 1 (9.3.1).
         if psdu.len() != length || length < FCS + 10 {
             return Err("tx_length");
         }
-        let mpdu: Arc<[u8]> = Arc::from(&psdu[..length - FCS]);
-        // The Protected Frame bit (9.2.4.1.9): the MAC would encrypt the frame with the key
-        // table's entry, which the model does not run.
+        let mut mpdu: Arc<[u8]> = Arc::from(&psdu[..length - FCS]);
+        // The Protected Frame bit (9.2.4.1.9): the MAC encrypts the frame with the key entry
+        // PLCP1 names.
         if mpdu[1] & PROTECTED != 0 {
-            return Err("tx_protected");
+            let entry = (plcp1 >> keys::PLCP1_SHIFT) & keys::PLCP1_ENTRY;
+            match keys::seal(
+                &self.keys,
+                self.word(keys::VALID),
+                |n| self.word(keys::CONTROL + 4 * n),
+                entry,
+                &mpdu,
+            )? {
+                Sealed::Mpdu(sealed) => mpdu = Arc::from(sealed),
+                Sealed::NoKey => {
+                    self.pending = Some(Pending {
+                        queue,
+                        at: Tick(now.0 + DIFS.0),
+                        waits: false,
+                        acked: false,
+                        outcome: Some(TX_KEY_ERROR),
+                    });
+                    return Ok(false);
+                }
+            }
         }
         // Address 1's Individual/Group bit (9.2.4.3.1). A group-addressed frame is not
         // acknowledged (10.3.2.11).
@@ -888,8 +967,9 @@ impl Radio {
             at: done,
             waits,
             acked: false,
+            outcome: None,
         });
-        Ok(())
+        Ok(true)
     }
 
     /// When the TBTT the driver armed would first raise the power interrupt: the first TBTT at
@@ -958,7 +1038,8 @@ impl Radio {
     /// [`EVENT_RX`] on the next tick. It acknowledges a frame to one station that a slot's
     /// receiver address took, as esp32-open-mac's write-up says the RA filter does, and only when
     /// the frame found a descriptor (its `wifi_hardware_task`: "acking will only happen if the
-    /// hardware puts the packet in an RX buffer"). `byte` reads SRAM on the data bus.
+    /// hardware puts the packet in an RX buffer"). A protected frame lands opened in place, or as
+    /// it came with its `rx_state`, as [`keys::open`] says. `byte` reads SRAM on the data bus.
     pub(crate) fn hear(
         &mut self,
         now: Tick,
@@ -970,10 +1051,23 @@ impl Radio {
         if slots == 0 {
             return Received::Missed;
         }
-        // The MAC would decrypt the frame with the key table's entry, which the model does not
-        // run.
+        // The Protected Frame bit: the MAC decrypts the frame with the key entry that takes it,
+        // for the interface of the lowest slot that took it, or keeps it as it came.
+        let mut opened = None;
+        let mut rx_state = 0;
         if frame.mpdu[1] & PROTECTED != 0 {
-            return Received::Refused("rx_protected");
+            match keys::open(
+                &self.keys,
+                self.word(keys::VALID),
+                |n| self.word(keys::CONTROL + 4 * n),
+                slots.trailing_zeros(),
+                frame.mpdu,
+            ) {
+                Ok(Opened::Mpdu(plain)) => opened = Some(plain),
+                Ok(Opened::NoKey) => rx_state = RX_NO_KEY,
+                Ok(Opened::Failed) => rx_state = RX_MIC_FAILURE,
+                Err(setting) => return Received::Refused(setting),
+            }
         }
         // A descriptor is free while the CPU has handed it to the MAC: bit 31 of its first word,
         // which `wDev_AppendRxBlocks` sets and the MAC clears, a guess.
@@ -1006,10 +1100,12 @@ impl Radio {
             return Received::Refused("rx_rate");
         };
         let mut bytes = Vec::with_capacity(length);
-        for word in self.rx_ctrl(now, frame, code, slots, psdu) {
+        let mut words = self.rx_ctrl(now, frame, code, slots, psdu);
+        words[11] |= rx_state << RX_STATE_SHIFT;
+        for word in words {
             bytes.extend_from_slice(&word.to_le_bytes());
         }
-        bytes.extend_from_slice(frame.mpdu);
+        bytes.extend_from_slice(opened.as_deref().unwrap_or(frame.mpdu));
         bytes.extend_from_slice(&fcs(frame.mpdu).to_le_bytes());
         // `length`, bits 12 to 23, holds what the MAC wrote, the EOF bit 30 marks the descriptor
         // done, as `wdevProcessRxSucDataAll` tests it, and the owner bit 31 goes back to the CPU.
@@ -1125,10 +1221,10 @@ impl Radio {
             return;
         };
         self.pending = None;
-        self.status[pending.queue as usize] = if pending.waits && !pending.acked {
-            TX_ACK_TIMEOUT
-        } else {
-            TX_SUCCESS
+        self.status[pending.queue as usize] = match pending.outcome {
+            Some(outcome) => outcome,
+            None if pending.waits && !pending.acked => TX_ACK_TIMEOUT,
+            None => TX_SUCCESS,
         };
         self.done |= 1 << pending.queue;
         self.events |= EVENT_TX_DONE;
@@ -1543,9 +1639,9 @@ mod tests {
         let mut untuned = Radio::new();
         assert!(write(&mut untuned, PLCP1, 0x31));
         assert_eq!(refused(&mut untuned, 49), Store::Refused("tx_channel"));
-        // The reserved code 4, and MCS 0 with the short guard interval.
-        for code in [0x04, 0x18] {
-            let mut radio = ready(code << PLCP1_RATE_SHIFT | 0x31);
+        // The reserved code 4, MCS 0 with the short guard interval, and MCS 0 without bit 25.
+        for (code, ht) in [(0x04, 0), (0x18, PLCP1_HT), (0x10, 0)] {
+            let mut radio = ready(code << PLCP1_RATE_SHIFT | ht | 0x31);
             assert_eq!(refused(&mut radio, 49), Store::Refused("tx_rate"));
         }
         let mut radio = ready(0x31);
@@ -1912,24 +2008,24 @@ mod tests {
     fn the_key_table_is_storage() {
         let mut radio = Radio::new();
         assert!(Radio::slot(0x6003_3814).is_some(), "the valid bits");
-        let last = KEYS + 4 * (KEY_ENTRIES * KEY_WORDS - 1) as u32;
-        for addr in [KEYS, last] {
+        let last = keys::KEYS + 4 * (KEY_TABLE - 1) as u32;
+        for addr in [keys::KEYS, last] {
             assert!(blocks::name(addr).starts_with("RADIO"), "{addr:#x}");
         }
         for entry in [0, 24] {
-            let at = KEYS + 40 * entry;
-            for k in 0..KEY_WORDS as u32 {
+            let at = keys::KEYS + 40 * entry;
+            for k in 0..keys::WORDS as u32 {
                 assert_eq!(read(&mut radio, at + 4 * k), Some(0));
                 assert!(write(&mut radio, at + 4 * k, 0x1000 * entry + k));
             }
             assert_eq!(read(&mut radio, at + 4), Some(0x1000 * entry + 1));
-            for k in 0..KEY_WORDS as u32 {
+            for k in 0..keys::WORDS as u32 {
                 assert!(write(&mut radio, at + 4 * k, 0));
                 assert_eq!(read(&mut radio, at + 4 * k), Some(0));
             }
         }
-        assert_eq!(read(&mut radio, KEYS + 40 * 25), None);
-        assert_eq!(read(&mut radio, KEYS - 4), None);
+        assert_eq!(read(&mut radio, keys::KEYS + 40 * 25), None);
+        assert_eq!(read(&mut radio, keys::KEYS - 4), None);
     }
 
     /// After the join the driver leaves slot 0's receiver address on the station and puts its
@@ -1992,26 +2088,226 @@ mod tests {
         assert_eq!(radio.read(Tick(480 << 32), MAC_CLOCK), Some(0));
     }
 
-    /// A frame the MAC would encrypt or decrypt with the key table is refused by name.
-    #[test]
-    fn a_protected_frame_is_refused_by_name() {
-        let mut protected = PROBE;
-        protected[4..10].copy_from_slice(&AP);
-        protected[1] = PROTECTED;
-        let mut radio = ready(0x31);
-        assert_eq!(
-            start(&mut radio, Tick(0), &protected, 49),
-            Store::Refused("tx_protected")
-        );
+    /// IEEE 802.11-2020 J.6.4's CCMP test vector: the TK, a Data frame's MAC header with Retry
+    /// and Protected set, its CCMP header of PN 0xb5039776e70c, its plaintext, and the ciphertext
+    /// and MIC.
+    const TK: [u8; 16] = [
+        0xc9, 0x7c, 0x1f, 0x67, 0xce, 0x37, 0x11, 0x85, 0x51, 0x4a, 0x8a, 0x19, 0xf2, 0xbd, 0xd5,
+        0x2f,
+    ];
+    const VECTOR_HEADER: [u8; 24] = [
+        0x08, 0x48, 0xc3, 0x2c, 0x0f, 0xd2, 0xe1, 0x28, 0xa5, 0x7c, 0x50, 0x30, 0xf1, 0x84, 0x44,
+        0x08, 0xab, 0xae, 0xa5, 0xb8, 0xfc, 0xba, 0x80, 0x33,
+    ];
+    const VECTOR_CCMP: [u8; 8] = [0x0c, 0xe7, 0x00, 0x20, 0x76, 0x97, 0x03, 0xb5];
+    const VECTOR_PLAINTEXT: [u8; 20] = [
+        0xf8, 0xba, 0x1a, 0x55, 0xd0, 0x2f, 0x85, 0xae, 0x96, 0x7b, 0xb6, 0x2f, 0xb6, 0xcd, 0xa8,
+        0xeb, 0x7e, 0x78, 0xa0, 0x50,
+    ];
+    const VECTOR_SEALED: [u8; 28] = [
+        0xf3, 0xd0, 0xa2, 0xfe, 0x9a, 0x3d, 0xbf, 0x23, 0x42, 0xa6, 0x43, 0xe4, 0x32, 0x46, 0xe8,
+        0x0c, 0x3c, 0x04, 0xd0, 0x19, 0x78, 0x45, 0xce, 0x0b, 0x16, 0xf9, 0x76, 0x23,
+    ];
 
+    /// The words the stock station's driver writes for its pairwise key: entry 4, CCMP, bits 21,
+    /// 22 and 27, interface 0, key ID 0, for `peer`, or bits 21 to 23 for WEP. Valid, and interface 0's crypto on, as
+    /// `hal_crypto_enable` leaves it.
+    fn install(radio: &mut Radio, peer: [u8; 6], key: [u8; 16], cipher: u32) {
+        let at = keys::KEYS + 40 * 4;
+        let high = u32::from(u16::from_le_bytes([peer[4], peer[5]]));
+        assert!(write(
+            radio,
+            at,
+            u32::from_le_bytes(peer[..4].try_into().unwrap())
+        ));
+        let kind = if cipher == 1 { 7 } else { 3 };
+        assert_eq!(
+            radio.write(
+                Tick(0),
+                at + 4,
+                1 << 27 | kind << 21 | cipher << 18 | high,
+                |_| None
+            ),
+            Store::Kept
+        );
+        for k in 0..4 {
+            let word = u32::from_le_bytes(key[4 * k..4 * k + 4].try_into().unwrap());
+            assert!(write(radio, at + 8 + 4 * k as u32, word));
+        }
+        assert!(write(radio, keys::VALID, 1 << 4));
+        assert!(write(radio, keys::CONTROL, 0x30103));
+    }
+
+    /// The vector's frame as the driver leaves it in a queue's buffer: the CCMP header it filled,
+    /// the plaintext, the 8 octets for the MIC with `ppProcTxSecFrame`'s marks, and the FCS.
+    fn protected_buffer() -> Vec<u8> {
+        let mut buffer = VECTOR_HEADER.to_vec();
+        buffer.extend(VECTOR_CCMP);
+        buffer.extend(VECTOR_PLAINTEXT);
+        buffer.extend([0xef, 0xbe, 0xad, 0xde, 0, 0, 0x78, 0x56]);
+        buffer.extend([0; 4]);
+        buffer
+    }
+
+    /// A protected frame goes on the air under the key entry PLCP1's bits 17 to 24 name, with
+    /// its ciphertext and MIC over the plaintext and the 8 octets left for the MIC, as the
+    /// standard's vector has them. Its PN is the one in the driver's CCMP header.
+    #[test]
+    fn a_protected_frame_goes_on_the_air_sealed_under_the_entry_plcp1_names() {
+        let buffer = protected_buffer();
+        let length = buffer.len() as u32;
+        let mut radio = ready(4 << keys::PLCP1_SHIFT | length);
+        install(&mut radio, VECTOR_HEADER[4..10].try_into().unwrap(), TK, 3);
+        assert_eq!(start(&mut radio, Tick(0), &buffer, length), Store::Sent);
+        let end = radio.end().unwrap();
+        radio.report(end);
+        let frame = radio.take_aired().unwrap();
+        let mut want = VECTOR_HEADER.to_vec();
+        want.extend(VECTOR_CCMP);
+        want.extend(VECTOR_SEALED);
+        assert_eq!(*frame.mpdu, want[..]);
+        assert_eq!(
+            frame.end,
+            after(frame.start, Rate::Dsss1.airtime(length as usize))
+        );
+    }
+
+    /// When the entry PLCP1 names is not in use, or is beyond the table, the MAC sends nothing.
+    /// It reports the outcome `lmacProcessTxError` hands to `lmacProcessTxseckiderr`, when the
+    /// frame would have started.
+    #[test]
+    fn a_protected_frame_without_its_entry_reports_a_key_error_and_is_not_sent() {
+        let buffer = protected_buffer();
+        let length = buffer.len() as u32;
+        for entry in [4, 5, 25, 0x84] {
+            let mut radio = ready(entry << keys::PLCP1_SHIFT | length);
+            install(&mut radio, VECTOR_HEADER[4..10].try_into().unwrap(), TK, 3);
+            if entry == 4 {
+                assert!(write(&mut radio, keys::VALID, 0));
+            }
+            assert_eq!(start(&mut radio, Tick(0), &buffer, length), Store::Kept);
+            assert_eq!(radio.end(), None);
+            let done = Tick(50 * 480);
+            assert_eq!(radio.next_event(Tick(0)), Some(done));
+            assert!(!radio.line(Tick(done.0 - 1)));
+            assert!(radio.line(done));
+            assert_eq!(radio.read(done, TX_STATUS), Some(TX_KEY_ERROR));
+            assert_eq!(radio.read(done, TX_DONE), Some(1));
+        }
+    }
+
+    /// A cipher other than CCMP-128 and a protected Management frame are refused by name.
+    #[test]
+    fn a_protected_frame_the_model_cannot_seal_is_refused_by_name() {
+        let buffer = protected_buffer();
+        let length = buffer.len() as u32;
+        for (cipher, name) in [(1, "tx_wep"), (2, "tx_tkip"), (5, "tx_gcmp")] {
+            let mut radio = ready(4 << keys::PLCP1_SHIFT | length);
+            install(&mut radio, [0; 6], TK, cipher);
+            assert_eq!(
+                start(&mut radio, Tick(0), &buffer, length),
+                Store::Refused(name)
+            );
+        }
+        let mut management = buffer.clone();
+        management[0] = 0xd0;
+        let mut radio = ready(4 << keys::PLCP1_SHIFT | length);
+        install(&mut radio, [0; 6], TK, 3);
+        assert_eq!(
+            start(&mut radio, Tick(0), &management, length),
+            Store::Refused("tx_mfp")
+        );
+    }
+
+    /// A listening station whose pairwise entry holds the access point's address.
+    fn keyed(ram: &mut Ram) -> Radio {
+        let mut radio = listening(ram);
+        install(&mut radio, AP, TK, 3);
+        radio
+    }
+
+    /// The vector's frame from the access point to the station, sealed as the station's MAC
+    /// seals the vector.
+    fn sealed_vector() -> Vec<u8> {
+        let mut buffer = protected_buffer();
+        buffer[1] = 0x42;
+        buffer[4..10].copy_from_slice(&STA);
+        buffer[10..16].copy_from_slice(&AP);
+        let length = buffer.len() as u32;
+        let mut radio = ready(4 << keys::PLCP1_SHIFT | length);
+        install(&mut radio, AP, TK, 3);
+        assert_eq!(start(&mut radio, Tick(0), &buffer, length), Store::Sent);
+        let end = radio.end().unwrap();
+        radio.report(end);
+        radio.take_aired().unwrap().mpdu.to_vec()
+    }
+
+    /// A protected frame that the pairwise entry of its Address 2 takes lands with its plaintext
+    /// over its ciphertext. The MAC header, the CCMP header and the MIC stay, for the driver's
+    /// `ccmp_decap` to read and strip, and `rx_state` is 0.
+    #[test]
+    fn a_protected_frame_lands_decrypted_in_place() {
+        let mut ram = Ram::default();
+        let mut radio = keyed(&mut ram);
+        let mpdu = sealed_vector();
+        let ack = ram.apply(radio.hear(Tick(0), heard(&mpdu), |at| ram.0.get(&at).copied()));
+        assert!(ack);
+        let at = BUF0 + RX_CTRL as u32;
+        let mut want = mpdu.clone();
+        want[32..52].copy_from_slice(&VECTOR_PLAINTEXT);
+        assert_eq!(ram.bytes(at, mpdu.len()), want);
+        assert_eq!(ram.word(BUF0 + 44), mpdu.len() as u32 + 4, "rx_state 0");
+        let length = RX_CTRL as u32 + mpdu.len() as u32 + 4;
+        assert_eq!(ram.word(RX0), EOF | length << 12 | SIZE);
+    }
+
+    /// A protected frame whose MIC fails, or that no entry takes, lands as it came with an
+    /// `rx_state` the driver drops, and is still acknowledged, as the ACK does not wait for the
+    /// MIC.
+    #[test]
+    fn a_protected_frame_the_mac_cannot_open_lands_as_it_came_with_its_rx_state() {
+        let mut tampered = sealed_vector();
+        tampered[40] ^= 1;
+        let mut short = sealed_vector();
+        short[27] &= !0x20;
+        for (mpdu, valid, state) in [
+            (tampered, 1 << 4, RX_MIC_FAILURE),
+            (short, 1 << 4, RX_MIC_FAILURE),
+            (sealed_vector(), 0, RX_NO_KEY),
+        ] {
+            let mut ram = Ram::default();
+            let mut radio = keyed(&mut ram);
+            assert!(write(&mut radio, keys::VALID, valid));
+            let ack = ram.apply(radio.hear(Tick(0), heard(&mpdu), |at| ram.0.get(&at).copied()));
+            assert!(ack);
+            assert_eq!(ram.bytes(BUF0 + RX_CTRL as u32, mpdu.len()), mpdu);
+            assert_eq!(
+                ram.word(BUF0 + 44),
+                state << RX_STATE_SHIFT | (mpdu.len() as u32 + 4)
+            );
+            assert_ne!(state, 245, "not the TKIP Michael MIC failure");
+        }
+    }
+
+    /// A protected frame the model cannot open is refused by name, once a slot took it.
+    #[test]
+    fn a_protected_frame_the_model_cannot_open_is_refused_by_name() {
         let mut ram = Ram::default();
         let mut radio = listening(&mut ram);
+        install(&mut radio, AP, TK, 2);
         let mut mpdu = management(5, STA);
         mpdu[1] = PROTECTED;
         let map = ram.0.clone();
         assert_eq!(
             radio.hear(Tick(0), heard(&mpdu), |at| map.get(&at).copied()),
-            Received::Refused("rx_protected")
+            Received::Refused("rx_mfp")
+        );
+        let mut data = sealed_vector();
+        data[4..10].copy_from_slice(&STA);
+        data[10..16].copy_from_slice(&AP);
+        assert_eq!(
+            radio.hear(Tick(0), heard(&data), |at| map.get(&at).copied()),
+            Received::Refused("rx_tkip")
         );
         // One no slot takes is dropped as before.
         mpdu[4..10].copy_from_slice(&[0x02, 0, 0, 0, 0, 0x02]);
@@ -2021,26 +2317,99 @@ mod tests {
         );
     }
 
-    /// Turning on a coexistence timer or the beacon filter is refused by name. Turning either
-    /// off, as the stock station does, is kept.
+    /// Turning on a coexistence timer, forcing it or turning on the beacon filter is refused by
+    /// name. Turning either off, as the stock station does, is kept, and so are the bits
+    /// `coex_hw_timer_set` writes. A bit no blob function sets is refused by name.
     #[test]
     fn a_coexistence_timer_or_the_beacon_filter_turned_on_is_refused() {
-        let mut radio = Radio::new();
         for timer in [COEX_TIMERS, COEX_TIMERS + 16, COEX_TIMERS + 24] {
-            assert_eq!(radio.write(Tick(0), timer, 0, |_| None), Store::Kept);
+            for (value, store) in [
+                (0, Store::Kept),
+                (0x4fff_ffff, Store::Kept),
+                (COEX_TIMER_ON, Store::Refused("coex_timer")),
+                (COEX_TIMER_FORCE, Store::Refused("coex_force")),
+                (1 << 29, Store::Refused("coex_timer_bits")),
+            ] {
+                let mut radio = Radio::new();
+                assert_eq!(
+                    radio.write(Tick(0), timer, value, |_| None),
+                    store,
+                    "{timer:#x} {value:#x}"
+                );
+            }
+        }
+        for (value, store) in [
+            (0, Store::Kept),
+            (7, Store::Refused("beacon_filter")),
+            (1 << 3, Store::Refused("beacon_filter_bits")),
+            (1 << 31, Store::Refused("beacon_filter_bits")),
+        ] {
+            let mut radio = Radio::new();
             assert_eq!(
-                radio.write(Tick(0), timer, COEX_TIMER_ON, |_| None),
-                Store::Refused("coex_timer")
+                radio.write(Tick(0), BEACON_FILTER, value, |_| None),
+                store,
+                "{value:#x}"
             );
         }
-        assert_eq!(
-            radio.write(Tick(0), BEACON_FILTER, 0, |_| None),
-            Store::Kept
-        );
-        assert_eq!(
-            radio.write(Tick(0), BEACON_FILTER, 7, |_| None),
-            Store::Refused("beacon_filter")
-        );
+    }
+
+    /// Each PLCP1 bit `mac_tx_set_plcp1` sets is kept: the length, the rate, the key entry's byte
+    /// in bits 17 to 24, bit 25 with an HT rate and bit 29. Each other bit, and bit 25 with a rate
+    /// below 16, is refused by name.
+    #[test]
+    fn a_plcp1_bit_no_blob_function_sets_is_refused() {
+        for value in [
+            0x0008_b1ff,
+            0xff << keys::PLCP1_SHIFT | 0x31,
+            PLCP1_HT | 0x10 << PLCP1_RATE_SHIFT | 0x31,
+            1 << 29 | 0x31,
+        ] {
+            let mut radio = Radio::new();
+            assert_eq!(
+                radio.write(Tick(0), PLCP1, value, |_| None),
+                Store::Kept,
+                "{value:#x}"
+            );
+        }
+        for value in [1 << 26, 1 << 27, 1 << 28, 1 << 30, 1 << 31, PLCP1_HT | 0x31] {
+            let mut radio = Radio::new();
+            assert_eq!(
+                radio.write(Tick(0), PLCP1, value, |_| None),
+                Store::Refused("tx_plcp1"),
+                "{value:#x}"
+            );
+        }
+        // MCS 0 with bit 25 goes on the air, and so does a frame with bit 29.
+        for plcp1 in [PLCP1_HT | 0x10 << PLCP1_RATE_SHIFT | 0x31, 1 << 29 | 0x31] {
+            let mut radio = ready(plcp1);
+            assert_eq!(start(&mut radio, Tick(0), &PROBE, 49), Store::Sent);
+        }
+    }
+
+    /// The radio refuses a store to the key table or its control words that no blob function
+    /// makes, as [`keys::refused`] names it, and keeps the stock station's.
+    #[test]
+    fn a_key_table_store_no_blob_function_makes_is_refused() {
+        let mut radio = Radio::new();
+        let word1 = keys::KEYS + 40 * 4 + 4;
+        for (addr, value) in [
+            (word1, 0x086c_0165),
+            (keys::VALID, 0x11),
+            (keys::CONTROL, 0x30103),
+        ] {
+            assert_eq!(radio.write(Tick(0), addr, value, |_| None), Store::Kept);
+        }
+        for (addr, value, name) in [
+            (word1, 0x086e_0165, "key_entry"),
+            (keys::VALID, 1 << 25, "key_valid"),
+            (keys::CONTROL, 0x103, "crypto_control"),
+            (0x6003_3840, 24, "crypto_init"),
+        ] {
+            assert_eq!(
+                radio.write(Tick(0), addr, value, |_| None),
+                Store::Refused(name)
+            );
+        }
     }
 
     /// The stock station's stores, in its order: timer 0 loaded with the access point's TSF

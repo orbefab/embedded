@@ -1,12 +1,16 @@
 //! An ESP32-S3 in a netlist with a network is built with its radio. The stock Arduino station
 //! sketch then gets through `esp_wifi_init` and `esp_wifi_start`, which `WiFi.mode(WIFI_STA)`
 //! runs, with no diagnostic, and its scan puts a probe request on the air on each channel and
-//! finds the network on its own. Its `WiFi.begin()` then authenticates, associates and runs the
-//! 4-way handshake, and the run ends at its first frame that needs the MAC to encrypt it.
+//! finds the network on its own. Its `WiFi.begin()` then authenticates, associates, runs the
+//! 4-way handshake and leases an address over DHCP in frames its MAC seals and opens under
+//! CCMP-128, and the run ends where its TBTT would first raise the power interrupt.
 //! Without the network the same app stops at the radio, as before.
 
+use std::net::Ipv4Addr;
 use std::sync::Arc;
 
+use orbe_crypto::aes::AesKey;
+use orbe_crypto::{ccm, pbkdf2, prf};
 use orbe_mcu::Setting;
 use orbe_model::Time;
 use orbe_model::air::{AirFrame, Rate};
@@ -15,6 +19,7 @@ use orbe_net::{Event, Mac};
 use super::active::run_active;
 use super::fixtures::open;
 use crate::active::Core;
+use crate::active::script::station::{aad, nonce};
 use crate::blob::Blobs;
 use crate::diagnostic::Diagnostic;
 use crate::netlist::Netlist;
@@ -269,13 +274,14 @@ fn sent_to_the_ap(session: &Session) -> Vec<AirFrame> {
     sent
 }
 
-/// The run ends where the chip's MAC would first encrypt a frame, by name.
-fn ends_at_the_first_protected_frame(session: &Session, status: Status) -> Time {
+/// The run ends where the station's TBTT would first raise the power interrupt, which the model
+/// does not run, by name.
+fn ends_at_the_first_tbtt(session: &Session, status: Status) -> Time {
     assert_eq!(status, Status::Faulted);
     match session.fault() {
         Some(&Diagnostic::ChipUnsupportedSetting {
             peripheral: "RADIO",
-            setting: Setting::Register("tx_protected"),
+            setting: Setting::Register("tbtt"),
             at,
             ..
         }) => at,
@@ -299,23 +305,112 @@ fn sequence(mpdu: &[u8]) -> u16 {
 /// The Retry bit of Frame Control (9.2.4.1.6).
 const RETRY: u8 = 0x08;
 
-/// The stock station's `WiFi.begin("orbe", "orbe-password")` joins the network: the network
-/// logs its Open System authentication, its association as AID 1 and the end of the 4-way
-/// handshake, and loses no frame. The station sends a Deauthentication, the Authentication and
-/// the Association Request, whose sequence numbers the driver counts on from the scan, then the
-/// 4-way handshake's messages 2 and 4 as Data frames numbered 0 and 1, each acknowledged, so
-/// none carries the Retry bit. Once the handshake has installed the keys, the driver's next
-/// frame is a protected Data frame, which the MAC would encrypt with the key table's entry. The
-/// model does not, so the run ends there, at about 3.21 s, as `tx_protected`. That frame is
-/// lwIP's DHCP Discover, which the DHCP client sends only once `WIFI_EVENT_STA_CONNECTED` has
-/// started it, so the station is connected by then.
+/// The network's frames to the station, once each.
+fn sent_to_the_station(session: &Session) -> Vec<AirFrame> {
+    let chip = (session.actives.cores().iter())
+        .position(|core| matches!(core, Core::Mcu(_)))
+        .expect("the chip");
+    let mut sent: Vec<AirFrame> = Vec::new();
+    for (sender, frame) in session.actives.aired() {
+        if *sender != chip && frame.mpdu[4..10] == STA && !sent.iter().any(|f| f.end == frame.end) {
+            sent.push(frame.clone());
+        }
+    }
+    sent
+}
+
+/// LLC/SNAP and an EtherType (IEEE 802.1X-2020, 11.3; RFC 1042).
+const LLC_EAPOL: [u8; 8] = [0xaa, 0xaa, 0x03, 0, 0, 0, 0x88, 0x8e];
+const LLC_IPV4: [u8; 8] = [0xaa, 0xaa, 0x03, 0, 0, 0, 0x08, 0x00];
+
+/// The Key Nonce of the EAPOL-Key frame in `mpdu`: after the LLC header, the EAPOL header's 4
+/// octets, the Descriptor Type, Key Information, Key Length and Key Replay Counter (IEEE
+/// 802.11-2020, 12.7.2).
+fn key_nonce(mpdu: &[u8]) -> [u8; 32] {
+    assert_eq!(mpdu[24..32], LLC_EAPOL);
+    mpdu[49..81].try_into().unwrap()
+}
+
+/// The TK of the 4-way handshake on the air, derived apart from the chip and the network: the
+/// PMK of "orbe-password" on "orbe" (12.7.1.3, PBKDF2-HMAC-SHA1 of 4096 rounds), then PRF-384
+/// over the two addresses and the ANonce of message 1 and the SNonce of message 2.
+fn tk(from_ap: &[AirFrame], to_ap: &[AirFrame]) -> AesKey {
+    let is_eapol = |f: &&AirFrame| f.mpdu.len() > 81 && f.mpdu[24..32] == LLC_EAPOL;
+    let anonce = key_nonce(&from_ap.iter().find(is_eapol).expect("message 1").mpdu);
+    let snonce = key_nonce(&to_ap.iter().find(is_eapol).expect("message 2").mpdu);
+    let mut pmk = [0; 32];
+    pbkdf2::pbkdf2_sha1(b"orbe-password", b"orbe", 4096, &mut pmk);
+    let mut data = Vec::new();
+    data.extend(AP.min(STA));
+    data.extend(AP.max(STA));
+    data.extend(anonce.min(snonce));
+    data.extend(anonce.max(snonce));
+    let mut ptk = [0; 48];
+    prf::prf(&pmk, b"Pairwise key expansion", &data, &mut ptk);
+    AesKey::new(&ptk[32..]).unwrap()
+}
+
+/// The PN of a protected Data frame's CCMP header (12.5.3.2), and its MSDU opened under `tk`,
+/// or `None` when its MIC fails.
+fn opened(tk: &AesKey, mpdu: &[u8]) -> (u64, Option<Vec<u8>>) {
+    let c = &mpdu[24..32];
+    assert_eq!(c[3], 0x20, "Extended IV, key ID 0");
+    let pn = u64::from_le_bytes([c[0], c[1], c[4], c[5], c[6], c[7], 0, 0]);
+    let a2: [u8; 6] = mpdu[10..16].try_into().unwrap();
+    let msdu = ccm::open(tk, &nonce(a2, pn), &aad(mpdu), &mpdu[32..], 8);
+    (pn, msdu)
+}
+
+/// The DHCP message type of a DHCP message in an IPv4 UDP datagram after LLC/SNAP, from
+/// `sport` to `dport`: option 53 (RFC 2132, 9.6) after the 236 fixed octets and the magic
+/// cookie (RFC 2131, 3).
+fn dhcp_type(msdu: &[u8], sport: u16, dport: u16) -> u8 {
+    assert_eq!(msdu[..8], LLC_IPV4);
+    let ip = &msdu[8..];
+    assert_eq!(ip[9], 17, "UDP");
+    let udp = &ip[usize::from(ip[0] & 0x0f) * 4..];
+    assert_eq!(
+        udp[..4],
+        [
+            (sport >> 8) as u8,
+            sport as u8,
+            (dport >> 8) as u8,
+            dport as u8
+        ]
+    );
+    let dhcp = &udp[8..];
+    assert_eq!(dhcp[236..240], [99, 130, 83, 99], "the magic cookie");
+    let mut options = &dhcp[240..];
+    while let [code, len, rest @ ..] = options {
+        if *code == 53 {
+            return rest[0];
+        }
+        options = &rest[usize::from(*len)..];
+    }
+    panic!("no DHCP message type")
+}
+
+/// The stock station's `WiFi.begin("orbe", "orbe-password")` joins the network and leases an
+/// address. The network logs its Open System authentication, its association as AID 1, the
+/// end of the 4-way handshake and the DHCP ACK of 192.168.1.100, and loses no frame. The
+/// station sends a Deauthentication, the Authentication and the Association Request, whose
+/// sequence numbers the driver counts on from the scan, then the 4-way handshake's messages 2
+/// and 4 as Data frames numbered 0 and 1, none with the Retry bit.
+///
+/// Its next Data frames are protected, sealed by its MAC under CCMP-128 with the pairwise key the
+/// handshake installed. Opened under the TK this test derives from the handshake on the air,
+/// the first is lwIP's DHCP Discover, with the PN the driver put in its CCMP header, and the
+/// network's answer to it is a DHCP Offer. The station's DHCP Request follows the Offer, which
+/// its MAC opened, and the network ACKs it. The station's PNs rise, and so do the network's.
+/// Then the station goes into power save, and the run ends by name at about 3.274 s, where its
+/// TBTT would first raise the power interrupt.
 #[test]
-fn the_stock_station_joins_the_network_and_ends_at_its_first_protected_frame() {
+fn the_stock_station_joins_the_network_leases_an_address_and_ends_at_its_first_tbtt() {
     let netlist = station(NETWORK, 3400);
     let mut session = open(&netlist, Vec::new(), BUDGET);
     let status = session.advance_to(Time::from_ps(3400 * MS));
-    let at = ends_at_the_first_protected_frame(&session, status);
-    assert!((3200..3250).contains(&(at.as_ps() / MS)), "{at:?}");
+    let at = ends_at_the_first_tbtt(&session, status);
+    assert!((3270..3280).contains(&(at.as_ps() / MS)), "{at:?}");
     assert!(
         session.diagnostics().is_empty(),
         "{:?}",
@@ -338,31 +433,68 @@ fn the_stock_station_joins_the_network_and_ends_at_its_first_protected_frame() {
                 aid: Some(1)
             },
             Event::Handshake { sta },
+            Event::DhcpAck {
+                sta,
+                ip: Ipv4Addr::new(192, 168, 1, 100)
+            },
         ]
+    );
+    assert!(
+        (session.network_rows().iter()).any(|row| row.event == Event::Doze { sta }),
+        "power save"
     );
 
     let sent = sent_to_the_ap(&session);
     let kinds: Vec<[u8; 2]> = sent.iter().map(|f| [f.mpdu[0], f.mpdu[1]]).collect();
     // Deauthentication, Authentication and Association Request (9.2.4.1.3), then two Data
-    // frames to the DS.
+    // frames to the DS, then protected ones.
     assert_eq!(
-        kinds,
-        [[0xc0, 0], [0xb0, 0], [0x00, 0], [0x08, 0x01], [0x08, 0x01]]
+        kinds[..6],
+        [
+            [0xc0, 0],
+            [0xb0, 0],
+            [0x00, 0],
+            [0x08, 0x01],
+            [0x08, 0x01],
+            [0x08, 0x41]
+        ]
     );
-    let numbers: Vec<u16> = sent.iter().map(|f| sequence(&f.mpdu)).collect();
+    let numbers: Vec<u16> = sent[..5].iter().map(|f| sequence(&f.mpdu)).collect();
     let first = numbers[0];
     assert_eq!(numbers, [first, first + 1, first + 2, 0, 1]);
-    for frame in &sent[3..] {
-        // LLC/SNAP and the EAPOL EtherType, then an EAPOL-Key (IEEE 802.1X-2020, 11.3).
-        assert_eq!(frame.mpdu[24..32], [0xaa, 0xaa, 0x03, 0, 0, 0, 0x88, 0x8e]);
+    for frame in &sent[3..5] {
         assert_eq!(frame.mpdu[33], 3, "EAPOL-Key");
+    }
+
+    let answers = sent_to_the_station(&session);
+    let tk = tk(&answers, &sent[3..]);
+    let protected = |frames: &[AirFrame]| -> Vec<(u64, Vec<u8>)> {
+        (frames.iter())
+            .filter(|f| f.mpdu[0] == 0x08 && f.mpdu[1] & 0x40 != 0)
+            .map(|f| match opened(&tk, &f.mpdu) {
+                (pn, Some(msdu)) => (pn, msdu),
+                (pn, None) => panic!("the MIC of PN {pn} fails"),
+            })
+            .collect()
+    };
+    let from_sta = protected(&sent);
+    let from_ap = protected(&answers);
+    let (pn, discover) = &from_sta[0];
+    // `ccmp_encap` counts the PN on from 0 in steps of 3.
+    assert_eq!(*pn, 3);
+    assert_eq!(dhcp_type(discover, 68, 67), 1, "DHCPDISCOVER");
+    assert_eq!(dhcp_type(&from_ap[0].1, 67, 68), 2, "DHCPOFFER");
+    assert_eq!(dhcp_type(&from_sta[1].1, 68, 67), 3, "DHCPREQUEST");
+    assert_eq!(dhcp_type(&from_ap[1].1, 67, 68), 5, "DHCPACK");
+    for pns in [&from_sta, &from_ap] {
+        assert!(pns.windows(2).all(|pair| pair[0].0 < pair[1].0), "{pns:?}");
     }
 }
 
 /// When the station's Authentication reaches the network but the ACK does not reach the
 /// station, its MAC reports an ACK timeout and the driver sends the same frame again, with the
 /// same sequence number and the Retry bit set, after the ACK would have ended. The network
-/// answers both, and the join goes on to the same end.
+/// answers both, and the join goes on to the same lease and the same end.
 #[test]
 fn a_lost_ack_has_the_driver_send_the_authentication_again_with_the_retry_bit() {
     let netlist = station(NETWORK, 3400);
@@ -371,7 +503,7 @@ fn a_lost_ack_has_the_driver_send_the_authentication_again_with_the_retry_bit() 
         frame.mpdu[0] == 0xb0 && frame.mpdu[1] & RETRY == 0 && frame.mpdu[10..16] == STA
     });
     let status = session.advance_to(Time::from_ps(3400 * MS));
-    ends_at_the_first_protected_frame(&session, status);
+    ends_at_the_first_tbtt(&session, status);
 
     let sent = sent_to_the_ap(&session);
     let auth: Vec<&AirFrame> = sent.iter().filter(|f| f.mpdu[0] == 0xb0).collect();
@@ -396,6 +528,10 @@ fn a_lost_ack_has_the_driver_send_the_authentication_again_with_the_retry_bit() 
                 aid: Some(1)
             },
             Event::Handshake { sta },
+            Event::DhcpAck {
+                sta,
+                ip: Ipv4Addr::new(192, 168, 1, 100)
+            },
         ]
     );
 }
