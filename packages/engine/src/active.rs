@@ -1481,24 +1481,42 @@ impl Actives {
         }
     }
 
-    /// Queues `msdu` from the network's router to `sta` at `at` (at or after the network's last
-    /// committed landing), resetting the network's ahead copy to match.
+    /// Queues `msdu` from the network's router to `sta` at `at` after bringing the network's
+    /// committed and ahead copies into twin agreement at `accepted`. Callers must resettle any
+    /// unaccepted landing after this so the solver sees the new network stop.
     #[cfg(test)]
-    pub(crate) fn send_to_station(&mut self, at: Time, sta: orbe_net::Mac, msdu: &[u8]) {
-        let slot = self
+    pub(crate) fn queue_network_msdu(
+        &mut self,
+        world: &World,
+        accepted: Time,
+        at: Time,
+        sta: orbe_net::Mac,
+        msdu: &[u8],
+    ) -> Result<(), crate::session::NetworkSendRejected> {
+        let Some(slot) = self
             .committed
             .iter()
             .position(|core| matches!(core, Core::Net(_)))
-            .expect("the network");
-        let reached = match &mut self.committed[slot] {
-            Core::Net(net) => {
-                net.send_msdu(at, sta, msdu);
-                net.reached()
-            }
-            _ => unreachable!(),
+        else {
+            return Err(crate::session::NetworkSendRejected::NoNetwork);
         };
-        self.ahead[slot].core.clone_from(&self.committed[slot]);
-        self.ahead[slot].reach = Reach::Done(reached);
+        if !matches!(self.ahead[slot].reach, Reach::Twin(twin) if twin == accepted) {
+            self.ahead[slot].rewind(world, &self.committed[slot], accepted);
+            self.ahead[slot].commit(&mut self.committed[slot], &mut self.staged);
+        }
+        match &mut self.committed[slot] {
+            Core::Net(net) => net
+                .send_msdu(at, sta, msdu)
+                .map_err(|_| crate::session::NetworkSendRejected::EventInPast)?,
+            _ => unreachable!(),
+        }
+        match &mut self.ahead[slot].core {
+            Core::Net(net) => net
+                .send_msdu(at, sta, msdu)
+                .expect("twin matches committed network"),
+            _ => unreachable!(),
+        }
+        Ok(())
     }
 
     /// Each frame a landing handed on, with its sender's slot.

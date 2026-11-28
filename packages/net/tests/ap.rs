@@ -362,3 +362,21 @@ fn beacons_stop_at_the_end_of_time() {
     }
     assert!(beacons >= 2);
 }
+
+// `send_msdu` refuses an event before `reached` by name without mutating the network.
+#[test]
+fn send_msdu_in_the_past_is_refused() {
+    let mut net = network(Security::Open);
+    let reached = ms(20.0);
+    let mut air = Air::new(Script::default());
+    air.run_through(&mut net, reached);
+    let before = net.clone();
+    assert_eq!(
+        net.send_msdu(ms(19.0), STA, &[0xaa, 0xaa, 0x03]),
+        Err(orbe_net::PastEvent {
+            at: ms(19.0),
+            reached,
+        })
+    );
+    assert_eq!(net, before);
+}

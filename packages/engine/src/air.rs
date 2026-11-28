@@ -61,13 +61,13 @@ impl Net {
     }
 
     #[cfg(test)]
-    pub(crate) fn reached(&self) -> Time {
-        self.network.reached()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn send_msdu(&mut self, at: Time, sta: orbe_net::Mac, msdu: &[u8]) {
-        self.network.send_msdu(at, sta, msdu);
+    pub(crate) fn send_msdu(
+        &mut self,
+        at: Time,
+        sta: orbe_net::Mac,
+        msdu: &[u8],
+    ) -> Result<(), orbe_net::PastEvent> {
+        self.network.send_msdu(at, sta, msdu)
     }
 
     /// Hands over and drops each row it made at or before `through`, in order.

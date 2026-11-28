@@ -24,7 +24,7 @@ use crate::active::script::station::{aad, nonce};
 use crate::blob::Blobs;
 use crate::diagnostic::Diagnostic;
 use crate::netlist::Netlist;
-use crate::session::{BUDGET, SerialCursor, Session, Status};
+use crate::session::{BUDGET, NetworkSendRejected, SerialCursor, Session, Status};
 
 const MS: u64 = 1_000_000_000;
 
@@ -683,45 +683,13 @@ fn the_dozing_station_wakes_3000_us_before_its_beacon() {
     );
 }
 
-/// Two ICMP Echo Requests buffered by the access point while the station dozes are delivered when
-/// the station wakes on the TIM beacon, and lwIP sends both Echo Replies back-to-back through the
-/// hardware TXOP table (`0x6003_437c`).
-#[test]
-fn two_buffered_pings_to_the_dozing_station_are_both_answered() {
-    let netlist = station(NETWORK, 4_600);
-    let mut session = open(&netlist, Vec::new(), BUDGET);
-    assert_eq!(
-        session.advance_to(Time::from_ps(4_300 * MS)),
-        Status::Running
-    );
-    let sta = Mac(STA);
-    let last_ps = session
-        .network_rows()
-        .iter()
-        .rev()
-        .find(|row| matches!(row.event, Event::Doze { .. } | Event::Wake { .. }))
-        .map(|row| row.event.clone());
-    assert_eq!(
-        last_ps,
-        Some(Event::Doze { sta }),
-        "station should be dozing"
-    );
-
-    let router = Ipv4Addr::new(192, 168, 1, 1);
-    let sta_ip = Ipv4Addr::new(192, 168, 1, 100);
-    let ping1 = icmp_echo_request(router, sta_ip, 0x1234, 1, b"first-ping");
-    let ping2 = icmp_echo_request(router, sta_ip, 0x1234, 2, b"second-ping");
-    let inject_at = Time::from_ps(4_300 * MS);
-    session.actives.send_to_station(inject_at, sta, &ping1);
-    session.actives.send_to_station(inject_at, sta, &ping2);
-
-    let status = session.advance_to(Time::from_ps(4_600 * MS));
-    runs_to_its_stop(&session, status);
-
-    let sent = sent_to_the_ap(&session);
-    let answers = sent_to_the_station(&session);
+/// Extracts decrypted ICMP Echo Replies matching `want_id` sent by the station to the AP,
+/// verifying each reply's ICMP checksum.
+fn icmp_echo_replies(session: &Session, want_id: u16) -> Vec<(u16, Vec<u8>, AirFrame)> {
+    let sent = sent_to_the_ap(session);
+    let answers = sent_to_the_station(session);
     let tk = tk(&answers, &sent[3..]);
-    let mut replies: Vec<(u16, Vec<u8>, AirFrame)> = Vec::new();
+    let mut replies = Vec::new();
     for frame in &sent {
         if frame.mpdu[0] == 0x08 && frame.mpdu[1] & 0x40 != 0 {
             let (_, Some(msdu)) = opened(&tk, &frame.mpdu) else {
@@ -737,7 +705,7 @@ fn two_buffered_pings_to_the_dozing_station_are_both_answered() {
                         assert_eq!(inet_checksum(icmp), 0, "ICMP reply checksum");
                         let id = u16::from_be_bytes([icmp[4], icmp[5]]);
                         let seq = u16::from_be_bytes([icmp[6], icmp[7]]);
-                        if id == 0x1234 {
+                        if id == want_id {
                             replies.push((seq, icmp[8..].to_vec(), frame.clone()));
                         }
                     }
@@ -745,13 +713,56 @@ fn two_buffered_pings_to_the_dozing_station_are_both_answered() {
             }
         }
     }
+    replies
+}
+
+/// The last power-save event (`Doze` or `Wake`) recorded by the network.
+fn last_power_save(session: &Session) -> Option<Event> {
+    session
+        .network_rows()
+        .iter()
+        .rev()
+        .find(|row| matches!(row.event, Event::Doze { .. } | Event::Wake { .. }))
+        .map(|row| row.event.clone())
+}
+
+/// Two ICMP Echo Requests buffered by the access point while the station dozes are delivered when
+/// the station wakes on the TIM beacon, and lwIP sends both Echo Replies back-to-back through the
+/// hardware TXOP table (`0x6003_437c`).
+#[test]
+fn two_buffered_pings_to_the_dozing_station_are_both_answered() {
+    let netlist = station(NETWORK, 4_600);
+    let mut session = open(&netlist, Vec::new(), BUDGET);
+    assert_eq!(
+        session.advance_to(Time::from_ps(4_300 * MS)),
+        Status::Running
+    );
+    let sta = Mac(STA);
+    assert_eq!(
+        last_power_save(&session),
+        Some(Event::Doze { sta }),
+        "station should be dozing"
+    );
+
+    let router = Ipv4Addr::new(192, 168, 1, 1);
+    let sta_ip = Ipv4Addr::new(192, 168, 1, 100);
+    let ping1 = icmp_echo_request(router, sta_ip, 0x1234, 1, b"first-ping");
+    let ping2 = icmp_echo_request(router, sta_ip, 0x1234, 2, b"second-ping");
+    let inject_at = Time::from_ps(4_300 * MS);
+    session.send_to_station(inject_at, sta, &ping1).unwrap();
+    session.send_to_station(inject_at, sta, &ping2).unwrap();
+
+    let status = session.advance_to(Time::from_ps(4_600 * MS));
+    runs_to_its_stop(&session, status);
+
+    let replies = icmp_echo_replies(&session, 0x1234);
     let summary: Vec<(u16, Vec<u8>)> = replies
         .iter()
         .map(|(seq, body, _)| (*seq, body.clone()))
         .collect();
     assert_eq!(
         summary,
-        vec![(1, b"first-ping".to_vec()), (2, b"second-ping".to_vec()),],
+        vec![(1, b"first-ping".to_vec()), (2, b"second-ping".to_vec())],
         "both buffered pings must be answered"
     );
     // Both replies go in one hardware TXOP burst, so reply 2 starts SIFS (10 us) after reply 1's
@@ -762,4 +773,283 @@ fn two_buffered_pings_to_the_dozing_station_are_both_answered() {
         (10_000_000..=10_004_168).contains(&gap_ps),
         "expected SIFS (10 us) TXOP gap after ACK, got {gap_ps} ps"
     );
+}
+
+/// An ICMP Echo Request injected while the station is already awake (during its ARP wake windows)
+/// resettles the session's held landing instead of stepping past the new air frame, refuses a
+/// time in the simulated past by name, delivers the frame immediately without waiting for a TIM
+/// beacon, answers the post-IP ping during the wake window, and produces the same run however the
+/// schedule is split.
+#[test]
+fn a_ping_arriving_during_the_wake_window_is_answered() {
+    let sta = Mac(STA);
+    let router = Ipv4Addr::new(192, 168, 1, 1);
+    let sta_ip = Ipv4Addr::new(192, 168, 1, 100);
+
+    // 1. Pre-IP ARP probe wake at 4.010 s (RF on from ~4.009 s to ~4.060 s): injecting at
+    //    4 010 000 us must resettle the pre-solved 1 ms step instead of panicking, refuse a time
+    //    in the past by name, and deliver/ACK the frame immediately on the air.
+    {
+        let netlist = station(NETWORK, 4_100);
+        let mut session = open(&netlist, Vec::new(), BUDGET);
+        assert_eq!(
+            session.advance_to(Time::from_ps(4_010 * MS)),
+            Status::Running
+        );
+        assert_eq!(
+            last_power_save(&session),
+            Some(Event::Wake { sta }),
+            "station should be awake for its ARP probe at 4.010 s"
+        );
+        let ping = icmp_echo_request(router, sta_ip, 0x2001, 1, b"pre-ip-wake");
+        assert_eq!(
+            session.send_to_station(Time::from_ps(4_009 * MS), sta, &ping),
+            Err(NetworkSendRejected::EventInPast),
+            "event before now must be refused by name"
+        );
+        session
+            .send_to_station(Time::from_ps(4_010 * MS), sta, &ping)
+            .unwrap();
+        let status = session.advance_to(Time::from_ps(4_100 * MS));
+        runs_to_its_stop(&session, status);
+        assert!(
+            !session
+                .network_rows()
+                .iter()
+                .any(|r| matches!(r.event, Event::Lost { .. } | Event::Dropped { .. })),
+            "frame delivered during 4.010 s wake must be ACKed with no loss"
+        );
+        let delivered = sent_to_the_station(&session)
+            .into_iter()
+            .find(|f| f.start == Time::from_ps(4_010 * MS))
+            .expect("frame aired immediately at 4.010 s");
+        assert_eq!(delivered.end, Time::from_ps(4_010_042_000_000));
+    }
+
+    // 2. Post-IP ARP announcement wake at 5.010 s (Wake at ~5.0093 s, Doze at ~5.0596 s, next
+    //    beacon at 5.0176 s): the ping airs immediately at 5.010 s, is answered before the next
+    //    beacon, and gives the exact same run whether run straight through or split in 1.013 ms
+    //    chunks.
+    let run = |step: Option<u64>| {
+        let end = 5_100 * MS;
+        let inject = 5_010 * MS;
+        let netlist = station(NETWORK, 5_100);
+        let mut session = open(&netlist, Vec::new(), BUDGET);
+        if let Some(step) = step {
+            let mut at = 4_995 * MS;
+            while at < inject {
+                assert_eq!(session.advance_to(Time::from_ps(at)), Status::Running);
+                at += step;
+            }
+        }
+        assert_eq!(session.advance_to(Time::from_ps(inject)), Status::Running);
+        assert_eq!(
+            last_power_save(&session),
+            Some(Event::Wake { sta }),
+            "station should be awake for its ARP announcement at 5.010 s"
+        );
+        let ping = icmp_echo_request(router, sta_ip, 0x2002, 1, b"awake-ping");
+        session
+            .send_to_station(Time::from_ps(inject), sta, &ping)
+            .unwrap();
+        if let Some(step) = step {
+            let mut at = inject + step;
+            while at < end {
+                assert_eq!(session.advance_to(Time::from_ps(at)), Status::Running);
+                at += step;
+            }
+        }
+        let status = session.advance_to(Time::from_ps(end));
+        runs_to_its_stop(&session, status);
+        let mut aired: Vec<AirFrame> = Vec::new();
+        for (_, frame) in session.actives.aired() {
+            if frame.start.as_ps() >= 4_995 * MS && !aired.iter().any(|f| f.end == frame.end) {
+                aired.push(frame.clone());
+            }
+        }
+        let replies = icmp_echo_replies(&session, 0x2002);
+        (
+            printed(&session),
+            session.network_rows().to_vec(),
+            aired,
+            replies,
+        )
+    };
+
+    let straight = run(None);
+    assert!(
+        !straight
+            .1
+            .iter()
+            .any(|r| matches!(r.event, Event::Lost { .. } | Event::Dropped { .. })),
+        "no lost or dropped frames: {:?}",
+        straight.1
+    );
+    let [(seq, body, reply_frame)] = &straight.3[..] else {
+        panic!("expected one Echo Reply, got {:?}", straight.3);
+    };
+    assert_eq!((*seq, body.as_slice()), (1, b"awake-ping".as_slice()));
+    // The next beacon after 5.010 s is at 49 * 102.4 ms = 5 017 600 us; the reply finishes well
+    // before it, confirming the ping was delivered immediately while awake.
+    assert!(
+        reply_frame.end < Time::from_ps(5_017_600_000_000),
+        "expected reply before 5.0176 s beacon, ended at {} us",
+        reply_frame.end.as_ps() / 1_000_000
+    );
+    assert!(run(Some(1_013_000_000)) == straight, "split schedule");
+}
+
+/// Four ICMP Echo Requests buffered at 4.300 s before the station has ever ARP'd the router
+/// (`192.168.1.1`) are all delivered on the air and ACKed by the station's MAC (no `Lost` or
+/// `Dropped` row). Stock Arduino-ESP32 3.3.12 lwIP compiles `ARP_QUEUEING=1` with
+/// `ARP_QUEUE_LEN=3` (`lwip/opt.h:656`, `etharp_query` in `app.bin` at `0x4202_95ac: bgeui a10, 3`),
+/// so lwIP queues replies 1 to 3 while waiting for its ARP Reply and frees reply 4 in software;
+/// the 3 queued replies go out in one 10 us SIFS TXOP burst once the ARP Reply arrives.
+#[test]
+fn four_buffered_pings_before_arp_hit_lwips_arp_queue_limit_of_three() {
+    let netlist = station(NETWORK, 4_600);
+    let mut session = open(&netlist, Vec::new(), BUDGET);
+    assert_eq!(
+        session.advance_to(Time::from_ps(4_300 * MS)),
+        Status::Running
+    );
+    let sta = Mac(STA);
+    assert_eq!(last_power_save(&session), Some(Event::Doze { sta }));
+
+    let router = Ipv4Addr::new(192, 168, 1, 1);
+    let sta_ip = Ipv4Addr::new(192, 168, 1, 100);
+    let inject_at = Time::from_ps(4_300 * MS);
+    for seq in 1..=4u16 {
+        let ping = icmp_echo_request(
+            router,
+            sta_ip,
+            0x3004,
+            seq,
+            format!("cold-{seq}").as_bytes(),
+        );
+        session.send_to_station(inject_at, sta, &ping).unwrap();
+    }
+
+    let status = session.advance_to(Time::from_ps(4_600 * MS));
+    runs_to_its_stop(&session, status);
+    assert!(
+        !session
+            .network_rows()
+            .iter()
+            .any(|r| matches!(r.event, Event::Lost { .. } | Event::Dropped { .. })),
+        "MAC must ACK all 4 downlink frames with no loss"
+    );
+
+    // All 4 Echo Requests aired from the AP after 4.300 s.
+    let sent = sent_to_the_ap(&session);
+    let answers = sent_to_the_station(&session);
+    let tk = tk(&answers, &sent[3..]);
+    let downlink_seqs: Vec<u16> = answers
+        .iter()
+        .filter(|f| f.start.as_ps() >= 4_300 * MS && f.mpdu[0] == 0x08 && f.mpdu[1] & 0x40 != 0)
+        .filter_map(|f| {
+            let (_, Some(msdu)) = opened(&tk, &f.mpdu) else {
+                return None;
+            };
+            if msdu.starts_with(&LLC_IPV4) && msdu.len() >= 8 + 20 + 8 && msdu[8 + 9] == 1 {
+                let icmp = &msdu[8 + 20..];
+                (icmp[0] == 8 && u16::from_be_bytes([icmp[4], icmp[5]]) == 0x3004)
+                    .then(|| u16::from_be_bytes([icmp[6], icmp[7]]))
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(
+        downlink_seqs,
+        vec![1, 2, 3, 4],
+        "AP delivered all 4 requests"
+    );
+
+    let replies = icmp_echo_replies(&session, 0x3004);
+    let seqs: Vec<u16> = replies.iter().map(|(seq, _, _)| *seq).collect();
+    assert_eq!(
+        seqs,
+        vec![1, 2, 3],
+        "stock lwIP ARP_QUEUE_LEN=3 queues 3 replies during ARP resolution"
+    );
+    for pair in replies.windows(2) {
+        let after_ack = pair[0].2.end.as_ps() + pair[0].2.rate.acked_after();
+        let gap_ps = pair[1].2.start.as_ps() - after_ack;
+        assert!(
+            (10_000_000..=10_004_168).contains(&gap_ps),
+            "expected SIFS (10 us) TXOP gap, got {gap_ps} ps"
+        );
+    }
+}
+
+/// Once the router's MAC is in the station's ARP cache (after one prior ping resolves ARP), both
+/// N=4 and N=8 buffered Echo Requests to a dozing station are all delivered and answered with
+/// zero loss, and N=9 answers 8 while recording `Event::Dropped` for the 9th exceeding the AP's
+/// power-save buffer (`HELD = 8`).
+#[test]
+fn four_and_eight_buffered_pings_with_warm_arp_are_all_answered() {
+    let sta = Mac(STA);
+    let router = Ipv4Addr::new(192, 168, 1, 1);
+    let sta_ip = Ipv4Addr::new(192, 168, 1, 100);
+
+    for (n, want_replies, want_dropped) in [(4u16, 4usize, 0usize), (8, 8, 0), (9, 8, 1)] {
+        let netlist = station(NETWORK, 4_800);
+        let mut session = open(&netlist, Vec::new(), BUDGET);
+        assert_eq!(
+            session.advance_to(Time::from_ps(4_250 * MS)),
+            Status::Running
+        );
+        let warmup = icmp_echo_request(router, sta_ip, 0x4000, 0, b"arp-warm");
+        session
+            .send_to_station(Time::from_ps(4_250 * MS), sta, &warmup)
+            .unwrap();
+
+        assert_eq!(
+            session.advance_to(Time::from_ps(4_400 * MS)),
+            Status::Running
+        );
+        assert_eq!(
+            last_power_save(&session),
+            Some(Event::Doze { sta }),
+            "station should be dozing before N={n} burst"
+        );
+        let inject_at = Time::from_ps(4_400 * MS);
+        for seq in 1..=n {
+            let ping = icmp_echo_request(
+                router,
+                sta_ip,
+                0x4000 + n,
+                seq,
+                format!("warm-{n}-{seq}").as_bytes(),
+            );
+            session.send_to_station(inject_at, sta, &ping).unwrap();
+        }
+
+        let status = session.advance_to(Time::from_ps(4_800 * MS));
+        runs_to_its_stop(&session, status);
+
+        let lost = session
+            .network_rows()
+            .iter()
+            .filter(|r| matches!(r.event, Event::Lost { .. }))
+            .count();
+        let dropped = session
+            .network_rows()
+            .iter()
+            .filter(|r| matches!(r.event, Event::Dropped { .. }))
+            .count();
+        assert_eq!(lost, 0, "N={n}: no unacknowledged frames");
+        assert_eq!(dropped, want_dropped, "N={n}: dropped row count");
+
+        let replies = icmp_echo_replies(&session, 0x4000 + n);
+        let summary: Vec<(u16, Vec<u8>)> = replies
+            .iter()
+            .map(|(seq, body, _)| (*seq, body.clone()))
+            .collect();
+        let expected: Vec<(u16, Vec<u8>)> = (1..=want_replies as u16)
+            .map(|seq| (seq, format!("warm-{n}-{seq}").into_bytes()))
+            .collect();
+        assert_eq!(summary, expected, "N={n}: expected {want_replies} replies");
+    }
 }
