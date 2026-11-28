@@ -33,7 +33,9 @@ the bounce test vectors, the VCD reader and its summary, the bare flyback summar
 refusal. The regulator deck and the refusal cases run ngspice. The rest do not. Without
 ngspice-42 on PATH, those cases fail. A fixture directory that contains `rows-skipped` keeps the collector
 peak, the collector minimum and the release edge. `p-relay-npn-bare` is that
-fixture. Its rows are not stored. A fixture without that file keeps its rows.
+fixture. Its rows are not stored. A fixture without that file keeps its rows. A fixture
+directory that contains `free-running` takes reltol=1e-7 and vntol=1e-10. `ne555-ring-rail` is
+that fixture.
 """
 
 import hashlib
@@ -57,6 +59,11 @@ OPTIONS = "temp=25 tnom=25 reltol=1e-9 abstol=1e-15 vntol=1e-12 gmin=1e-12"
 # capped at stop/60000, and its points are read at the engine's rows.
 INDUCTOR_OPTIONS = "temp=25 tnom=25 reltol=1e-5 abstol=1e-15 vntol=1e-12 gmin=1e-12"
 INDUCTOR_TMAX = 60_000
+# A fixture with this file runs an NE555 free beside a circuit that times itself. ngspice-42
+# stops that deck with Timestep too small at reltol=1e-9 and at 1e-8, so it takes these. The
+# file's text says why its rows are compared on the ring alone.
+FREE_RUNNING_FILE = "free-running"
+FREE_RUNNING_OPTIONS = "temp=25 tnom=25 reltol=1e-7 abstol=1e-15 vntol=1e-10 gmin=1e-12"
 RAW = "op.raw"
 TRAN_RAW = "tran.raw"
 EDGES_RAW = "edges.raw"
@@ -451,6 +458,7 @@ def generate(example, version):
     if bare_fixture(example):
         return bare_files(example, netlist, netlist_bytes, version)
     deck, mapping = translate(example.name, netlist)
+    deck, options = fixture_options(example, deck, deck_options(netlist))
     transient = "transient" in netlist["analysis"]
     chips = [part for part in netlist["parts"] if part["kind"] in CHIPS]
     relays = [part for part in netlist["parts"] if part["kind"] == "relay"]
@@ -499,7 +507,7 @@ def generate(example, version):
         "netlist_sha256": hashlib.sha256(netlist_bytes).hexdigest(),
         "deck_sha256": hashlib.sha256(deck.encode()).hexdigest(),
         "ngspice": version,
-        "options": deck_options(netlist),
+        "options": options,
     }
     if transient:
         reference["tran"] = {
@@ -552,6 +560,16 @@ def deck_options(netlist):
     if "transient" in netlist["analysis"] and has_inductor(netlist):
         return INDUCTOR_OPTIONS
     return OPTIONS
+
+
+def fixture_options(example, deck, options):
+    """The deck and its options, with `FREE_RUNNING_OPTIONS` in a `free-running` fixture."""
+    if not (example / FREE_RUNNING_FILE).is_file():
+        return deck, options
+    line = f".options {options}\n"
+    if deck.count(line) != 1:
+        raise SystemExit(f"{example.name}: the deck has no single options line")
+    return deck.replace(line, f".options {FREE_RUNNING_OPTIONS}\n"), FREE_RUNNING_OPTIONS
 
 
 def corner_times(netlist):

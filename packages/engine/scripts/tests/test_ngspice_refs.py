@@ -300,6 +300,7 @@ def test_decks_grid_and_bounce():
         nmos_deck(refs),
         pmos_deck(refs),
         inductor_deck(refs),
+        free_running_options(refs),
         capacitor_esr_deck(refs),
         corner_check(refs),
         relay_deck(refs),
@@ -1257,6 +1258,26 @@ def inductor_deck(refs):
     ok = ok and text.splitlines()[1] == f".options {refs.OPTIONS}"
     ok = ok and refs.deck_options(rl_netlist({"op": {}})) == refs.OPTIONS
     return {"name": "inductor deck", "ok": ok}
+
+
+def free_running_options(refs):
+    """A `free-running` fixture's deck takes reltol=1e-7 and vntol=1e-10 in its options line,
+    and a fixture without the file keeps its deck."""
+    tran = {"transient": {"stop_ps": 60000000, "max_step_ps": 1000000, "grid_ps": 1000000}}
+    netlist = {**rl_netlist(tran), "parts": rl_netlist(tran)["parts"][:1]}
+    deck, _ = refs.translate("free", netlist)
+    options = refs.deck_options(netlist)
+    with tempfile.TemporaryDirectory() as tmp:
+        plain = refs.fixture_options(Path(tmp), deck, options)
+        Path(tmp, refs.FREE_RUNNING_FILE).write_text("why\n")
+        free, free_options = refs.fixture_options(Path(tmp), deck, options)
+    ok = plain == (deck, options)
+    ok = ok and free_options == refs.FREE_RUNNING_OPTIONS
+    ok = ok and free.splitlines()[1] == f".options {refs.FREE_RUNNING_OPTIONS}"
+    ok = ok and free.splitlines()[2:] == deck.splitlines()[2:]
+    want = refs.OPTIONS.replace("reltol=1e-9", "reltol=1e-7").replace("vntol=1e-12", "vntol=1e-10")
+    ok = ok and refs.FREE_RUNNING_OPTIONS == want
+    return {"name": "free-running options", "ok": ok}
 
 
 def capacitor_esr_deck(refs):

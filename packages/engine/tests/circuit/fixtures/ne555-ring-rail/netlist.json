@@ -1,0 +1,380 @@
+{
+  "version": 1,
+  "seed": 0,
+  "analysis": {
+    "transient": {
+      "stop_ps": 5000000000,
+      "max_step_ps": 1000000,
+      "grid_ps": 2500000
+    }
+  },
+  "ground": "gnd",
+  "nets": [
+    "cont",
+    "dis",
+    "gnd",
+    "k",
+    "n1",
+    "n2",
+    "n3",
+    "out",
+    "thr",
+    "vcc",
+    "vs"
+  ],
+  "parts": [
+    {
+      "name": "v1",
+      "kind": "voltage_source",
+      "pins": {
+        "p": "vs",
+        "n": "gnd"
+      },
+      "voltage": {
+        "value": 5.0,
+        "unit": "V"
+      }
+    },
+    {
+      "name": "rrail",
+      "kind": "resistor",
+      "pins": {
+        "a": "vs",
+        "b": "vcc"
+      },
+      "resistance": {
+        "value": 0.01,
+        "unit": "ohm"
+      },
+      "ratings": {
+        "power": null
+      }
+    },
+    {
+      "name": "vk",
+      "kind": "voltage_source",
+      "pins": {
+        "p": "k",
+        "n": "gnd"
+      },
+      "voltage": {
+        "kind": "pulse",
+        "initial": {
+          "value": 0.0,
+          "unit": "V"
+        },
+        "pulsed": {
+          "value": 5.0,
+          "unit": "V"
+        },
+        "delay_ps": 1000000,
+        "width_ps": 2000000,
+        "period_ps": 10000000000
+      }
+    },
+    {
+      "name": "rk",
+      "kind": "resistor",
+      "pins": {
+        "a": "k",
+        "b": "n1"
+      },
+      "resistance": {
+        "value": 1000000.0,
+        "unit": "ohm"
+      },
+      "ratings": {
+        "power": null
+      }
+    },
+    {
+      "name": "r1",
+      "kind": "resistor",
+      "pins": {
+        "a": "vcc",
+        "b": "n1"
+      },
+      "resistance": {
+        "value": 100000.0,
+        "unit": "ohm"
+      },
+      "ratings": {
+        "power": null
+      }
+    },
+    {
+      "name": "m1",
+      "kind": "nmos",
+      "pins": {
+        "drain": "n1",
+        "gate": "n3",
+        "source": "gnd"
+      },
+      "transconductance_parameter": {
+        "value": 0.0468,
+        "unit": "A/V^2"
+      },
+      "threshold_voltage": {
+        "value": 1.08,
+        "unit": "V"
+      },
+      "channel_length_modulation": {
+        "value": 0.0,
+        "unit": "1/V"
+      },
+      "gate_source_capacitance": {
+        "value": 1e-10,
+        "unit": "F"
+      },
+      "gate_drain_capacitance": {
+        "value": 1e-10,
+        "unit": "F"
+      },
+      "drain_source_capacitance": {
+        "value": 1e-10,
+        "unit": "F"
+      },
+      "ratings": {
+        "current": {
+          "value": 0.2,
+          "unit": "A"
+        },
+        "power": {
+          "value": 0.35,
+          "unit": "W"
+        }
+      }
+    },
+    {
+      "name": "r2",
+      "kind": "resistor",
+      "pins": {
+        "a": "vcc",
+        "b": "n2"
+      },
+      "resistance": {
+        "value": 100000.0,
+        "unit": "ohm"
+      },
+      "ratings": {
+        "power": null
+      }
+    },
+    {
+      "name": "m2",
+      "kind": "nmos",
+      "pins": {
+        "drain": "n2",
+        "gate": "n1",
+        "source": "gnd"
+      },
+      "transconductance_parameter": {
+        "value": 0.0468,
+        "unit": "A/V^2"
+      },
+      "threshold_voltage": {
+        "value": 1.08,
+        "unit": "V"
+      },
+      "channel_length_modulation": {
+        "value": 0.0,
+        "unit": "1/V"
+      },
+      "gate_source_capacitance": {
+        "value": 1e-10,
+        "unit": "F"
+      },
+      "gate_drain_capacitance": {
+        "value": 1e-10,
+        "unit": "F"
+      },
+      "drain_source_capacitance": {
+        "value": 1e-10,
+        "unit": "F"
+      },
+      "ratings": {
+        "current": {
+          "value": 0.2,
+          "unit": "A"
+        },
+        "power": {
+          "value": 0.35,
+          "unit": "W"
+        }
+      }
+    },
+    {
+      "name": "r3",
+      "kind": "resistor",
+      "pins": {
+        "a": "vcc",
+        "b": "n3"
+      },
+      "resistance": {
+        "value": 100000.0,
+        "unit": "ohm"
+      },
+      "ratings": {
+        "power": null
+      }
+    },
+    {
+      "name": "m3",
+      "kind": "nmos",
+      "pins": {
+        "drain": "n3",
+        "gate": "n2",
+        "source": "gnd"
+      },
+      "transconductance_parameter": {
+        "value": 0.0468,
+        "unit": "A/V^2"
+      },
+      "threshold_voltage": {
+        "value": 1.08,
+        "unit": "V"
+      },
+      "channel_length_modulation": {
+        "value": 0.0,
+        "unit": "1/V"
+      },
+      "gate_source_capacitance": {
+        "value": 1e-10,
+        "unit": "F"
+      },
+      "gate_drain_capacitance": {
+        "value": 1e-10,
+        "unit": "F"
+      },
+      "drain_source_capacitance": {
+        "value": 1e-10,
+        "unit": "F"
+      },
+      "ratings": {
+        "current": {
+          "value": 0.2,
+          "unit": "A"
+        },
+        "power": {
+          "value": 0.35,
+          "unit": "W"
+        }
+      }
+    },
+    {
+      "name": "ra",
+      "kind": "resistor",
+      "pins": {
+        "a": "vcc",
+        "b": "dis"
+      },
+      "resistance": {
+        "value": 1000.0,
+        "unit": "ohm"
+      },
+      "ratings": {
+        "power": null
+      }
+    },
+    {
+      "name": "rb",
+      "kind": "resistor",
+      "pins": {
+        "a": "dis",
+        "b": "thr"
+      },
+      "resistance": {
+        "value": 2400.0,
+        "unit": "ohm"
+      },
+      "ratings": {
+        "power": null
+      }
+    },
+    {
+      "name": "c1",
+      "kind": "capacitor",
+      "pins": {
+        "a": "thr",
+        "b": "gnd"
+      },
+      "capacitance": {
+        "value": 1e-09,
+        "unit": "F"
+      },
+      "initial": {
+        "value": 0.0,
+        "unit": "V"
+      }
+    },
+    {
+      "name": "u1",
+      "kind": "ne555",
+      "pins": {
+        "gnd": "gnd",
+        "trig": "thr",
+        "out": "out",
+        "reset": "vcc",
+        "cont": "cont",
+        "thres": "thr",
+        "disch": "dis",
+        "vcc": "vcc"
+      },
+      "ladder_resistance": {
+        "value": 5000.0,
+        "unit": "ohm"
+      },
+      "reset_threshold": {
+        "value": 0.7,
+        "unit": "V"
+      },
+      "discharge": {
+        "on_resistance": {
+          "value": 18.75,
+          "unit": "ohm"
+        },
+        "off_resistance": {
+          "value": 250000000.0,
+          "unit": "ohm"
+        }
+      },
+      "supply_resistance": {
+        "value": 1875.0,
+        "unit": "ohm"
+      },
+      "output": {
+        "high_drop": {
+          "value": 0.9,
+          "unit": "V"
+        },
+        "high_resistance": {
+          "value": 8.0,
+          "unit": "ohm"
+        },
+        "low_drop": {
+          "value": 0.016666666666666666,
+          "unit": "V"
+        },
+        "low_resistance": {
+          "value": 16.666666666666668,
+          "unit": "ohm"
+        }
+      }
+    },
+    {
+      "name": "rl",
+      "kind": "resistor",
+      "pins": {
+        "a": "out",
+        "b": "gnd"
+      },
+      "resistance": {
+        "value": 220.0,
+        "unit": "ohm"
+      },
+      "ratings": {
+        "power": null
+      }
+    }
+  ]
+}

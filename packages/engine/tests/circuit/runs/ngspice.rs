@@ -17,12 +17,19 @@ use sha2::{Digest, Sha256};
 
 /// A fixture that has this file holds only its node voltages to the bound. Its text says why.
 const NODES_ONLY_FILE: &str = "nodes-only";
+/// A fixture that has this file runs an NE555 free beside a ring that times itself. Its deck
+/// takes `FREE_RUNNING_OPTIONS`, and only its ring's nodes are compared. Its text says why.
+const FREE_RUNNING_FILE: &str = "free-running";
 
 /// What `packages/engine/scripts/ngspice_refs.py` writes into `ngspice.json`.
 const NGSPICE: &str = "ngspice-42";
 const OPTIONS: &str = "temp=25 tnom=25 reltol=1e-9 abstol=1e-15 vntol=1e-12 gmin=1e-12";
 /// A transient deck with an inductor or a relay, which crawls at the reltol above.
 const INDUCTOR_OPTIONS: &str = "temp=25 tnom=25 reltol=1e-5 abstol=1e-15 vntol=1e-12 gmin=1e-12";
+/// A `free-running` fixture's deck, which ngspice-42 stops with Timestep too small at the
+/// reltol above and at 1e-8.
+const FREE_RUNNING_OPTIONS: &str =
+    "temp=25 tnom=25 reltol=1e-7 abstol=1e-15 vntol=1e-10 gmin=1e-12";
 /// The deck's ramp at each contact edge and source jump, which is also the engine's first step
 /// after one.
 const EDGE_RAMP_PS: u64 = 1000;
@@ -184,7 +191,9 @@ fn every_example_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
 /// the swing. `nmos-ring-100pf` is a three-stage ring of that MOSFET with 100 pF on each pin
 /// pair and 100 kohm pull-ups, kicked by 5 V for 2 us through 1 Mohm and run 300 us. It times
 /// itself, so each edge's error carries into every later one. It has a `nodes-only` file, which
-/// says why only its node voltages are held to the bound. `nmos-regions` biases the drain
+/// says why only its node voltages are held to the bound. `ne555-ring-rail` has a
+/// `free-running` file, and `a_ring_beside_a_free_running_ne555_keeps_to_ngspice` checks it.
+/// `nmos-regions` biases the drain
 /// through reverse, linear and saturation.
 /// `pmos-regions` is that circuit with the supplies negated. `nmos-follower` holds the source off ground. `zener-forward`, `zener-reverse`,
 /// `zener-breakdown` and `zener-overload` hold the fitted zener forward, below the knee,
@@ -224,6 +233,7 @@ fn every_fixture_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
             "led-off",
             "led-reverse",
             "ne555-gate-1ff",
+            "ne555-ring-rail",
             "nmos-follower",
             "nmos-gate-100ff",
             "nmos-gate-100pf-1mv5",
@@ -269,11 +279,92 @@ fn every_fixture_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
         ]
     );
     for fixture in fixtures {
-        if common::skips_reference_rows(&fixture) {
+        if common::skips_reference_rows(&fixture) || fixture.join(FREE_RUNNING_FILE).is_file() {
             continue;
         }
         matches_its_reference(&fixture);
     }
+}
+
+/// The share of its span a free-running fixture's ring node may be off ngspice by at a row.
+/// The ring times itself for 125 cycles, so each cycle's error carries into the next. With
+/// every capacitance held to 1 nV an end on every step, the engine falls 12 ns behind ngspice
+/// by 5 ms and is 2.4 times 1e-3 of the span off, and ngspice itself moves 0.2 times it when
+/// its step cap halves. Held to their charge after the NE555's edges, the ring's capacitances
+/// fell 22 ns behind and 4.3 times off.
+const FREE_RUNNING_SHARE: f64 = 3e-3;
+
+/// `ne555-ring-rail` is the `nmos-ring-100pf` ring and a free-running NE555 at 249 kHz, RA
+/// 1 kohm, RB 2.4 kohm, 1 nF and 220 ohm on its output, sharing a 5 V source through 10 mohm,
+/// for 5 ms. Each NE555 edge moves the rail about 0.2 mV, and with it every ring capacitance's
+/// slope. The NE555's edges are not paired with ngspice's. At the deck's step cap, a
+/// four-hundred-thousandth of the run, ngspice's own NE555 period moves by 2e-3 when that cap
+/// halves. Its ring nodes are held to `FREE_RUNNING_SHARE` of their span at every row.
+#[test]
+fn a_ring_beside_a_free_running_ne555_keeps_to_ngspice() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/circuit/fixtures/ne555-ring-rail");
+    assert!(fixture.join(FREE_RUNNING_FILE).is_file());
+    let label = fixture.display();
+    let input = fs::read(fixture.join("netlist.json")).unwrap();
+    let reference = json(&fixture.join("ngspice.json"));
+    let deck = fs::read(fixture.join("deck.cir")).unwrap();
+    assert_eq!(
+        sha256_hex(&deck),
+        reference["deck_sha256"].as_str().unwrap(),
+        "{label} deck"
+    );
+    assert_eq!(
+        reference["ngspice"].as_str(),
+        Some(NGSPICE),
+        "{label} ngspice"
+    );
+    assert_eq!(
+        reference["options"].as_str(),
+        Some(FREE_RUNNING_OPTIONS),
+        "{label} options"
+    );
+    let done = orbe_engine::run(&input, Timestamp::from_unix_seconds(0));
+    let manifest: serde_json::Value =
+        serde_json::from_slice(done.folder.file("manifest.json").unwrap()).unwrap();
+    assert_eq!(
+        manifest["input"]["sha256"], reference["netlist_sha256"],
+        "{label}/netlist.json changed; run `uv run packages/engine/scripts/ngspice_refs.py {label}`"
+    );
+    assert!(
+        done.results.diagnostics().is_empty(),
+        "{label}: {:?}",
+        done.results.diagnostics()
+    );
+    let tran = &reference["tran"];
+    let reference_t: Vec<f64> = series_of(&label.to_string(), &tran["t_s"])
+        .iter()
+        .map(|t| t * 1e12)
+        .collect();
+    let trace = done.results.trace().unwrap();
+    let engine_t: Vec<f64> = trace.time().iter().map(|t| t.as_ps() as f64).collect();
+    assert_eq!(engine_t.len(), reference_t.len(), "{label}: rows");
+    let mut report = Vec::new();
+    let mut failed = false;
+    for key in ["#net.n1", "#net.n2", "#net.n3"] {
+        let wanted = series_of(&label.to_string(), &tran["values"][key]);
+        let got = column(trace, &label.to_string(), key);
+        let span = wanted.iter().copied().fold(f64::NEG_INFINITY, f64::max)
+            - wanted.iter().copied().fold(f64::INFINITY, f64::min);
+        let bound = FREE_RUNNING_SHARE * span + floor(key);
+        let (worst, at) = engine_t
+            .iter()
+            .zip(got)
+            .map(|(&t, &v)| ((v - interpolate(&reference_t, &wanted, t)).abs(), t))
+            .fold((0.0, 0.0), |a, b| if b.0 > a.0 { b } else { a });
+        failed |= worst > bound;
+        report.push(format!(
+            "{key}: {worst:.4e} V at {at} ps, bound {bound:.4e} V, {:.3} of it",
+            worst / bound
+        ));
+    }
+    eprintln!("{label}:\n{}", report.join("\n"));
+    assert!(!failed, "{label}:\n{}", report.join("\n"));
 }
 
 /// Every ngspice-translatable parameter set in `parts/`, generated by
