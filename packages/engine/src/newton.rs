@@ -27,10 +27,8 @@ pub(crate) struct Circuit {
     pub(crate) actives: Vec<active::Chip>,
     /// Every chip a netlist part builds, sorted by part, which is the order of the logic refs.
     logic: Vec<(PartId, Slot)>,
-    /// No part's stamp reads the iterate, and no active chip draws through a [`Draw`], so one
-    /// Newton call stamps one system.
-    ///
-    /// [`Draw`]: orbe_model::Draw
+    /// Neither a part's stamp nor an active chip's stamp reads the iterate, so one Newton call
+    /// stamps one system.
     pub(crate) linear: bool,
 }
 
@@ -89,7 +87,7 @@ impl Circuit {
             .collect();
         logic.sort_unstable_by_key(|&(id, _)| id);
         let linear = netlist.parts().all(|(_, part)| !part.model.reads_iterate())
-            && actives.iter().all(|chip| chip.draw.is_none());
+            && actives.iter().all(|chip| !chip.reads_iterate());
         let mut circuit = Circuit {
             netlist,
             layout,
@@ -369,6 +367,8 @@ pub(crate) struct Stall {
 pub(crate) enum Offender {
     /// Limited, or its current check failed.
     Junction(PartId),
+    /// An active chip's supply crossed its minimum-supply release threshold.
+    Supply(PartId),
     /// Moved more than its tolerance.
     Row(usize),
 }
@@ -376,7 +376,9 @@ pub(crate) enum Offender {
 impl Offender {
     pub(crate) fn describe(self, circuit: &Circuit) -> Ref {
         match self {
-            Offender::Junction(part) => Ref::Part(circuit.netlist.part(part).name.clone()),
+            Offender::Junction(part) | Offender::Supply(part) => {
+                Ref::Part(circuit.netlist.part(part).name.clone())
+            }
             Offender::Row(row) => circuit.layout.describe(&circuit.netlist, row),
         }
     }
@@ -385,9 +387,10 @@ impl Offender {
 /// Newton with junction limiting, at most `budget` solves, each on `solver`. On a linear
 /// circuit the solver's memo answers a system it kept.
 ///
-/// Converged means three checks pass in one iteration: no unknown moved more
-/// than its tolerance, every junction's current check passed, and no junction
-/// was limited. A capacitor's current is not one of those unknowns, as `worst_row` says.
+/// Converged means four checks pass in one iteration: no unknown moved more
+/// than its tolerance, every junction's current check passed, no junction
+/// was limited, and no active chip's supply-release state changed between
+/// stamping and solving. A capacitor's current is not one of those unknowns, as `worst_row` says.
 ///
 /// On a linear circuit the second iteration would stamp the first one's system, solve it to the
 /// same bits and pass every check, so the call returns after one solve with that iteration's
@@ -444,6 +447,23 @@ pub(crate) fn newton(
             }
         }
         let (worst_row, row_ratio) = worst_row(layout, iterate.solution.components(), &solution);
+        let supply_flipped = (!circuit.linear)
+            .then(|| {
+                circuit
+                    .actives
+                    .iter()
+                    .enumerate()
+                    .find(|&(k, chip)| {
+                        active::supply_flipped(
+                            chip,
+                            &conditions.cores[k],
+                            &iterate.solution,
+                            &solution,
+                        )
+                    })
+                    .map(|(_, chip)| chip.part.map_or(Offender::Row(worst_row), Offender::Supply))
+            })
+            .flatten();
         let before = std::mem::replace(
             &mut iterate,
             Iterate {
@@ -452,9 +472,10 @@ pub(crate) fn newton(
             },
         );
         spare = before.junctions;
-        offender = Some(match worst_junction {
-            Some((_, part)) => Offender::Junction(part),
-            None if row_ratio <= 1.0 => {
+        offender = Some(match (worst_junction, supply_flipped) {
+            (Some((_, part)), _) => Offender::Junction(part),
+            (None, Some(offender)) => offender,
+            (None, None) if row_ratio <= 1.0 => {
                 let moved = match circuit.linear {
                     true => vec![0.0; layout.size()],
                     false => (before.solution.components().iter())
@@ -468,14 +489,14 @@ pub(crate) fn newton(
                     moved,
                 });
             }
-            None if circuit.linear && iteration < budget => {
+            (None, None) if circuit.linear && iteration < budget => {
                 return Ok(Converged {
                     iterate,
                     iterations: iteration + 1,
                     moved: vec![0.0; layout.size()],
                 });
             }
-            None => Offender::Row(worst_row),
+            (None, None) => Offender::Row(worst_row),
         });
     }
     Err(Failure::Stalled(Stall {

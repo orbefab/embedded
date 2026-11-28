@@ -549,3 +549,96 @@ fn supply_dip_retains_registers_down_to_2v_and_resets_below_2v() {
     }
     assert_eq!(run_dip(1.9), 0, "dip=1.9V below 2 V floor should reset");
 }
+
+#[test]
+fn operating_point_and_first_sample_drive_dout_and_iset_without_draw() {
+    let make = |analysis: serde_json::Value| {
+        serde_json::json!({
+            "version": 1,
+            "seed": 0,
+            "analysis": analysis,
+            "ground": "gnd",
+            "nets": ["gnd", "vcc", "dout", "iset"],
+            "parts": [
+                source("v_vcc", "vcc", 5.0),
+                resistor("r_dout", "vcc", "dout", 10_000.0),
+                resistor("rset", "vcc", "iset", 10_000.0),
+                {
+                    "name": "u1",
+                    "kind": "max7219",
+                    "pins": {
+                        "VCC": "vcc", "GND": "gnd", "DIN": "gnd", "CLK": "gnd",
+                        "LOAD": "vcc", "DOUT": "dout", "ISET": "iset",
+                    },
+                    "input_threshold": { "low": val(0.8, "V"), "high": val(3.5, "V") },
+                    "dout": {
+                        "high_drop": val(0.0, "V"), "high_resistance": val(1000.0, "ohm"),
+                        "low_drop": val(0.0, "V"), "low_resistance": val(250.0, "ohm"),
+                    },
+                    "led_forward_voltage": val(1.85, "V"),
+                },
+            ],
+        })
+    };
+    let expected_dout = 5.0 * 250.0 / 10_250.0;
+    let expected_iset = 1.188 + (5.0 - 1.188) * 100.0 / 10_100.0;
+
+    let op_run = orbe_engine::run(
+        &serde_json::to_vec(&make(serde_json::json!({ "op": {} }))).unwrap(),
+        orbe_engine::timestamp::Timestamp::from_unix_seconds(0),
+    );
+    let op_obs: serde_json::Value =
+        serde_json::from_slice(op_run.folder.file("observations.json").unwrap()).unwrap();
+    let op_dout = op_obs["op"]["#net.dout"].as_f64().unwrap();
+    let op_iset = op_obs["op"]["#net.iset"].as_f64().unwrap();
+    assert!(
+        (op_dout - expected_dout).abs() < 1e-6,
+        "op DOUT {op_dout} vs {expected_dout}"
+    );
+    assert!(
+        (op_iset - expected_iset).abs() < 1e-6,
+        "op ISET {op_iset} vs {expected_iset}"
+    );
+
+    let tran = make(serde_json::json!({
+        "transient": { "stop_ps": 1_000_000_000u64, "max_step_ps": 100_000_000u64, "grid_ps": 100_000_000u64 }
+    }));
+    let done = orbe_engine::run(
+        &serde_json::to_vec(&tran).unwrap(),
+        orbe_engine::timestamp::Timestamp::from_unix_seconds(0),
+    );
+    let obs: serde_json::Value =
+        serde_json::from_slice(done.folder.file("observations.json").unwrap()).unwrap();
+    assert!((obs["op"]["#net.dout"].as_f64().unwrap() - expected_dout).abs() < 1e-6);
+    assert!((obs["op"]["#net.iset"].as_f64().unwrap() - expected_iset).abs() < 1e-6);
+
+    let index: serde_json::Value =
+        serde_json::from_slice(done.folder.file("traces/index.json").unwrap()).unwrap();
+    let rows = index["rows"].as_u64().unwrap() as usize;
+    let raw = done.folder.file("traces/analog.f64").unwrap();
+    let col = |name: &str| {
+        let idx = index["analog"]["columns"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .position(|entry| entry["ref"] == name)
+            .unwrap();
+        raw.as_chunks::<8>()
+            .0
+            .iter()
+            .skip(idx * rows)
+            .take(2)
+            .map(|&chunk| f64::from_le_bytes(chunk))
+            .collect::<Vec<_>>()
+    };
+    let dout = col("#net.dout");
+    let iset = col("#net.iset");
+    assert!(
+        (dout[0] - expected_dout).abs() < 1e-6 && (dout[1] - expected_dout).abs() < 1e-6,
+        "DOUT trace[0..2] = {dout:?}"
+    );
+    assert!(
+        (iset[0] - expected_iset).abs() < 1e-6 && (iset[1] - expected_iset).abs() < 1e-6,
+        "ISET trace[0..2] = {iset:?}"
+    );
+}
