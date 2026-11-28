@@ -14,11 +14,15 @@ use orbe_scene::{RefMap, si_amount};
 
 use super::quantity;
 use crate::duration::Duration;
-use crate::reply::{Code, Error, Light};
+use crate::reply::{Change, Code, Error, Light};
 use crate::target::one_engine;
 
 /// How long an LED's brightness averages its current.
 pub const BRIGHTNESS_WINDOW: Duration = Duration::from_ms(20);
+
+/// The fixed absolute grid on which LED currents are sampled and state holds are timed,
+/// independent of how `step` or `play` slices time.
+pub(super) const SAMPLE_GRID: Duration = Duration::from_ms(1);
 
 /// A light-state change is listed once it has held this long, about one cycle of the slowest
 /// Arduino PWM, so one sample of that ripple is not listed as lit and then off. `--until` on
@@ -40,10 +44,19 @@ struct Span {
     instant: f64,
 }
 
-/// The forward-current integral of each lamp, sampled as time advances, kept for one window.
+/// The light state the session has listed, and a newer state waiting out [`LIGHT_HOLD`].
+#[derive(Clone, Copy, Debug)]
+struct Held {
+    shown: Light,
+    since: Option<(Light, u64)>,
+}
+
+/// The forward-current integral of each lamp, sampled on [`SAMPLE_GRID`], kept for one window,
+/// together with each lamp's pending [`LIGHT_HOLD`] state across steps.
 pub(super) struct Log {
     lamps: Vec<Lamp>,
     samples: Vec<VecDeque<Span>>,
+    held: Vec<Held>,
 }
 
 /// One lamp's brightness at one time.
@@ -55,9 +68,10 @@ pub(super) struct Glow {
 }
 
 impl Log {
-    pub(super) fn build(
+    pub(super) fn open(
         refs: &RefMap,
         reports: &std::collections::BTreeMap<String, Vec<Quantity>>,
+        probe: &Probe,
     ) -> Log {
         let mut lamps = Vec::new();
         for (path, part) in &refs.parts {
@@ -82,7 +96,27 @@ impl Log {
             });
         }
         let samples = vec![VecDeque::new(); lamps.len()];
-        Log { lamps, samples }
+        let mut log = Log {
+            lamps,
+            samples,
+            held: Vec::new(),
+        };
+        log.note(probe);
+        log.held = log
+            .glows(probe)
+            .into_iter()
+            .map(|glow| Held {
+                shown: glow.state,
+                since: None,
+            })
+            .collect();
+        log
+    }
+
+    /// The next fixed [`SAMPLE_GRID`] tick strictly after `t_ps`.
+    pub(super) fn next_sample_after(t_ps: u64) -> Option<u64> {
+        let step = SAMPLE_GRID.as_ps();
+        (t_ps / step).checked_add(1)?.checked_mul(step)
     }
 
     pub(super) fn lamps(&self) -> &[Lamp] {
@@ -125,10 +159,70 @@ impl Log {
         ))
     }
 
+    /// Records each lamp on the fixed [`SAMPLE_GRID`] and returns any light-state change whose
+    /// [`LIGHT_HOLD`] completes at this sample.
+    pub(super) fn sample(&mut self, probe: &Probe) -> Vec<Change> {
+        let now = probe.at().as_ps();
+        debug_assert_eq!(now % SAMPLE_GRID.as_ps(), 0, "light sample off grid: {now}");
+        self.note(probe);
+        let mut found = Vec::new();
+        for index in 0..self.lamps.len() {
+            let glow = self.glow(index, probe);
+            let track = &mut self.held[index];
+            if glow.state == track.shown {
+                track.since = None;
+                continue;
+            }
+            let since = match track.since {
+                Some((state, since)) if state == glow.state => since,
+                _ => {
+                    track.since = Some((glow.state, now));
+                    now
+                }
+            };
+            if now.saturating_sub(since) >= LIGHT_HOLD.as_ps() {
+                found.push(Change::Led {
+                    by_ps: now,
+                    part: self.lamps[index].path.clone(),
+                    state: glow.state,
+                    brightness: glow.amperes,
+                    over_ps: glow.over_ps,
+                });
+                track.shown = glow.state;
+                track.since = None;
+            }
+        }
+        found
+    }
+
+    /// Lists `want` on lamp `index` at `probe`'s time when `--until` just met that state before
+    /// [`LIGHT_HOLD`] elapsed, and records it as shown so the hold does not list it again.
+    pub(super) fn list_asked(
+        &mut self,
+        index: usize,
+        want: Light,
+        probe: &Probe,
+    ) -> Option<Change> {
+        let glow = self.glow(index, probe);
+        let track = &mut self.held[index];
+        if glow.state != want || track.shown == want {
+            return None;
+        }
+        track.shown = want;
+        track.since = None;
+        Some(Change::Led {
+            by_ps: probe.at().as_ps(),
+            part: self.lamps[index].path.clone(),
+            state: glow.state,
+            brightness: glow.amperes,
+            over_ps: glow.over_ps,
+        })
+    }
+
     /// Records each lamp's integral at the probe's time. A second record at the same time
     /// replaces the first. Samples older than the window are dropped, except the newest one
     /// at or before that, which is the anchor [`average`] subtracts.
-    pub(super) fn note(&mut self, probe: &Probe) {
+    fn note(&mut self, probe: &Probe) {
         let now = probe.at().as_ps();
         let horizon = now.saturating_sub(BRIGHTNESS_WINDOW.as_ps());
         for (lamp, samples) in self.lamps.iter().zip(self.samples.iter_mut()) {
@@ -226,23 +320,40 @@ fn integral(probe: &Probe, column: &EngineRef) -> f64 {
     probe.integrals()[index]
 }
 
-/// The average from the newest sample at or before `now` minus the window, or from the oldest
-/// sample when the session is younger. At one instant, `dt` is 0 and the average is `instant`.
+/// The average over the exact [`BRIGHTNESS_WINDOW`] ending at `now`, or since the oldest stored
+/// sample when the session is younger. When `now` minus the window falls between two stored
+/// samples, the integral at the window's start is linearly interpolated between them. At one
+/// instant, `dt` is 0 and the average is `instant`.
 fn average(samples: &VecDeque<Span>, now: u64, integral_now: f64, instant: f64) -> (f64, u64) {
-    let horizon = now.saturating_sub(BRIGHTNESS_WINDOW.as_ps());
-    let start = samples
-        .iter()
-        .rev()
-        .find(|span| span.t_ps <= horizon)
-        .or_else(|| samples.front());
-    let Some(start) = start else {
+    let Some(first) = samples.front() else {
         return (instant, 0);
     };
-    let dt = now.saturating_sub(start.t_ps);
+    let horizon = now.saturating_sub(BRIGHTNESS_WINDOW.as_ps());
+    if horizon <= first.t_ps {
+        let dt = now.saturating_sub(first.t_ps);
+        if dt == 0 {
+            return (instant, 0);
+        }
+        return ((integral_now - first.integral) / dt as f64, dt);
+    }
+    let right = samples.partition_point(|span| span.t_ps <= horizon);
+    let left = samples[right - 1];
+    let integral_start = if left.t_ps == horizon {
+        left.integral
+    } else if let Some(next) = samples.get(right) {
+        let frac = (horizon - left.t_ps) as f64 / (next.t_ps - left.t_ps) as f64;
+        left.integral + frac * (next.integral - left.integral)
+    } else if now > left.t_ps {
+        let frac = (horizon - left.t_ps) as f64 / (now - left.t_ps) as f64;
+        left.integral + frac * (integral_now - left.integral)
+    } else {
+        return (instant, 0);
+    };
+    let dt = now.saturating_sub(horizon);
     if dt == 0 {
         return (instant, 0);
     }
-    ((integral_now - start.integral) / dt as f64, dt)
+    ((integral_now - integral_start) / dt as f64, dt)
 }
 
 /// One segment's log and its integral and current now.
@@ -483,6 +594,10 @@ mod tests {
                 dim: 0.0001,
             }],
             samples: vec![samples],
+            held: vec![Held {
+                shown: Light::Off,
+                since: None,
+            }],
         }
     }
 
@@ -732,5 +847,46 @@ mod tests {
         };
         let faint = |_: u64| 1e-4;
         assert_eq!(seen_at(40_000, &[&pulse, &faint]), [true, false]);
+    }
+
+    #[test]
+    fn an_off_grid_read_interpolates_the_exact_window_start() {
+        // 0 mA for [0, 10 ms), then 10 mA for [10 ms, 40 ms].
+        let mut samples = VecDeque::new();
+        let mut integral = 0.0;
+        let ms = 1_000_000_000u64;
+        for m in 0..=30u64 {
+            let instant = if m >= 10 { 0.01 } else { 0.0 };
+            samples.push_back(Span {
+                t_ps: m * ms,
+                integral,
+                instant,
+            });
+            if m >= 10 {
+                integral += 0.01 * ms as f64;
+            }
+        }
+        // Read at 30.5 ms: window is [10.5 ms, 30.5 ms], completely inside the 10 mA region.
+        let now = 30 * ms + ms / 2;
+        let integral_now = samples.back().unwrap().integral + 0.01 * (ms / 2) as f64;
+        let (amperes, over_ps) = average(&samples, now, integral_now, 0.01);
+        assert_eq!(over_ps, BRIGHTNESS_WINDOW.as_ps());
+        assert!((amperes - 0.01).abs() < 1e-12, "{amperes}");
+
+        // Read at 29.7 ms: window is [9.7 ms, 29.7 ms] = 0.3 ms at 0 mA + 19.7 ms at 10 mA.
+        let before: VecDeque<Span> = samples
+            .iter()
+            .copied()
+            .filter(|s| s.t_ps <= 29 * ms)
+            .collect();
+        let now = 29 * ms + 700_000_000;
+        let integral_now = before.back().unwrap().integral + 0.01 * 700_000_000.0;
+        let (amperes, over_ps) = average(&before, now, integral_now, 0.01);
+        assert_eq!(over_ps, BRIGHTNESS_WINDOW.as_ps());
+        let expected = 0.01 * 19.7 / 20.0;
+        assert!(
+            (amperes - expected).abs() < 1e-12,
+            "{amperes} vs {expected}"
+        );
     }
 }

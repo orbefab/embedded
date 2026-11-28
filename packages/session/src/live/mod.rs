@@ -528,8 +528,7 @@ impl Open {
         let pin_names = pin_names(&refs);
         let edges = engine.edge_cursor();
         let contacts = frame::contacts(json);
-        let mut light = light::Log::build(&refs, &reports);
-        light.note(&engine.probe());
+        let light = light::Log::open(&refs, &reports, &engine.probe());
         let mut tone = tone::Log::build(&refs, &reports, &signals);
         tone.note(&engine.probe(), engine.now().as_ps());
         let mut open = Open {

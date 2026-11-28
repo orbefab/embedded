@@ -9,12 +9,12 @@ use orbe_engine::diagnostic::Diagnostic as EngineDiagnostic;
 use orbe_engine::{EdgeCursor, Status, SupplyMark};
 
 use super::bound::Bound;
-use super::light::LIGHT_HOLD;
+use super::light;
 use super::serial::Arrived;
 use super::{Key, Open, Outcome, fail, failed, key, level, t};
 use crate::command::Step;
 use crate::duration::Duration;
-use crate::reply::{Change, Check, Code, Data, Error, Got, LedRead, Level, Light, Met, Stepped};
+use crate::reply::{Change, Check, Code, Data, Error, Got, LedRead, Level, Met, Stepped};
 use crate::target::Ref;
 
 /// What `play` held, then what the step returned. A step that did not run has no list of
@@ -32,7 +32,7 @@ fn held_then(mut held: Stepped, data: Data) -> Data {
 }
 
 /// `step` advances in slices this long, so `--until` and a caller see each one.
-/// Each slice records an LED sample.
+/// LED samples and state holds run on [`light::SAMPLE_GRID`], independent of slice boundaries.
 const SLICE: Duration = Duration::from_ms(1);
 /// The most changes one `step` lists.
 pub const CHANGES: usize = 20;
@@ -59,12 +59,6 @@ impl Progress<'_> {
 struct Slice {
     changes: Vec<Change>,
     arrived: Arrived,
-}
-
-/// The light state a step has listed, and a newer state waiting out [`LIGHT_HOLD`].
-struct Held {
-    shown: Light,
-    since: Option<(Light, u64)>,
 }
 
 impl Open {
@@ -137,6 +131,39 @@ impl Open {
             let landing = self.engine.next_at().map_or(to, |at| at.as_ps().min(to));
             self.engine.advance_to(Time::from_ps(landing));
             self.note_tone();
+        }
+    }
+
+    /// Advances one slice up to `to`, stopping at any fixed light-grid tick strictly before `to`
+    /// to record LED samples and emit any completed light-state hold. Returns the status, any
+    /// pin edge that stopped the slice early, and whether `engine.now()` landed on a light-grid
+    /// tick still to be sampled with the slice's probe.
+    fn advance_slice(
+        &mut self,
+        to: u64,
+        end: u64,
+        from: u64,
+        pin: Option<(usize, Level)>,
+        found: &mut Vec<Change>,
+    ) -> (Status, Option<u64>, bool) {
+        if self.light.lamps().is_empty() {
+            let (status, edge) = self.advance(to, end, from, pin);
+            return (status, edge, false);
+        }
+        loop {
+            let now = self.engine.now().as_ps();
+            let grid = light::Log::next_sample_after(now);
+            let target = grid.map_or(to, |g| g.min(to));
+            let (status, edge) = self.advance(target, end, from, pin);
+            let reached = self.engine.now().as_ps();
+            let on_grid = grid == Some(reached);
+            if edge.is_some() || status != Status::Running || reached >= to {
+                return (status, edge, on_grid);
+            }
+            if on_grid {
+                let probe = self.engine.probe();
+                found.extend(self.light.sample(&probe));
+            }
         }
     }
 
@@ -273,17 +300,7 @@ impl Open {
         };
         self.playing = false;
         let probe = self.engine.probe();
-        self.light.note(&probe);
         self.tone.note(&probe, from);
-        let mut held: Vec<Held> = self
-            .light
-            .glows(&probe)
-            .into_iter()
-            .map(|glow| Held {
-                shown: glow.state,
-                since: None,
-            })
-            .collect();
         let mut known: BTreeSet<Key> = self.findings(&probe).iter().map(key).collect();
         drop(probe);
         let mut changes = Vec::new();
@@ -311,47 +328,26 @@ impl Open {
         let mut cancelled = false;
         while met.is_none() && now < end && status == Status::Running {
             let to = now.saturating_add(SLICE.as_ps()).min(end);
+            let mut found = Vec::new();
             let edge;
-            (status, edge) = self.advance(to, end, from, pin);
+            let sample_at_end;
+            (status, edge, sample_at_end) = self.advance_slice(to, end, from, pin, &mut found);
             now = self.engine.now().as_ps();
             let slice = self.drain(status != Status::Running);
             if let Some((_, _, bound)) = &until {
                 met = edge.map(Met::Edge).or_else(|| self.met_in(bound, &slice));
             }
-            let mut found = slice.changes;
+            found.extend(slice.changes);
             let probe = self.engine.probe();
-            self.light.note(&probe);
+            if sample_at_end {
+                found.extend(self.light.sample(&probe));
+            }
             self.tone.note(&probe, now);
-            let glows = self.light.glows(&probe);
-            let met_light = until.as_ref().and_then(|(_, _, bound)| match bound {
-                Bound::Light { index, want, .. } => met.is_some().then_some((*index, *want)),
-                _ => None,
-            });
-            for (index, glow) in glows.iter().enumerate() {
-                let track = &mut held[index];
-                if glow.state == track.shown {
-                    track.since = None;
-                    continue;
-                }
-                let since = match track.since {
-                    Some((state, since)) if state == glow.state => since,
-                    _ => {
-                        track.since = Some((glow.state, now));
-                        now
-                    }
-                };
-                let asked = met_light.is_some_and(|(i, want)| i == index && want == glow.state);
-                if asked || now.saturating_sub(since) >= LIGHT_HOLD.as_ps() {
-                    found.push(Change::Led {
-                        by_ps: now,
-                        part: self.light.lamps()[index].path.clone(),
-                        state: glow.state,
-                        brightness: glow.amperes,
-                        over_ps: glow.over_ps,
-                    });
-                    track.shown = glow.state;
-                    track.since = None;
-                }
+            if let Some((_, _, Bound::Light { index, want, .. })) = &until
+                && met.is_some()
+                && let Some(change) = self.light.list_asked(*index, *want, &probe)
+            {
+                found.push(change);
             }
             for d in self.findings(&probe) {
                 // `list_supply` lists these once the step ends.
