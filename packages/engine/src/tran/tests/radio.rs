@@ -3,9 +3,10 @@
 //! runs, with no diagnostic, and its scan puts a probe request on the air on each channel and
 //! finds the network on its own. Its `WiFi.begin()` then authenticates, associates, runs the
 //! 4-way handshake and leases an address over DHCP in frames its MAC seals and opens under
-//! CCMP-128, and the run ends where its TBTT would first raise the power interrupt.
+//! CCMP-128, and goes into power save, its RF powered down between the beacons its TBTT wakes it
+//! for. It prints its address, then looks up `pool.ntp.org`, asks the network for the time over
+//! SNTP and prints the date, and dozes on with no fault to the end of the run.
 //! Without the network the same app stops at the radio, as before.
-
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 
@@ -274,19 +275,14 @@ fn sent_to_the_ap(session: &Session) -> Vec<AirFrame> {
     sent
 }
 
-/// The run ends where the station's TBTT would first raise the power interrupt, which the model
-/// does not run, by name.
-fn ends_at_the_first_tbtt(session: &Session, status: Status) -> Time {
-    assert_eq!(status, Status::Faulted);
-    match session.fault() {
-        Some(&Diagnostic::ChipUnsupportedSetting {
-            peripheral: "RADIO",
-            setting: Setting::Register("tbtt"),
-            at,
-            ..
-        }) => at,
-        fault => panic!("{fault:?}"),
-    }
+/// The run reaches its stop with no fault and no diagnostic.
+fn runs_to_its_stop(session: &Session, status: Status) {
+    assert_eq!(status, Status::Stopped, "{:?}", session.fault());
+    assert!(
+        session.diagnostics().is_empty(),
+        "{:?}",
+        session.diagnostics()
+    );
 }
 
 /// The network's rows other than the station's power-save ones.
@@ -402,29 +398,30 @@ fn dhcp_type(msdu: &[u8], sport: u16, dport: u16) -> u8 {
 /// the first is lwIP's DHCP Discover, with the PN the driver put in its CCMP header, and the
 /// network's answer to it is a DHCP Offer. The station's DHCP Request follows the Offer, which
 /// its MAC opened, and the network ACKs it. The station's PNs rise, and so do the network's.
-/// Then the station goes into power save, and the run ends by name at about 3.274 s, where its
-/// TBTT would first raise the power interrupt.
+/// Then the station goes into power save and prints its address. At about 8.995 s it looks up
+/// `pool.ntp.org`, which the network answers with the router's address, asks the router for the
+/// time over SNTP, which the network answers with its epoch and the time since the start, and
+/// prints the date. The run then reaches its stop with no fault.
 #[test]
-fn the_stock_station_joins_the_network_leases_an_address_and_ends_at_its_first_tbtt() {
-    let netlist = station(NETWORK, 3400);
+fn the_stock_station_joins_the_network_and_prints_its_address_and_the_date_from_sntp() {
+    let netlist = station(NETWORK, 9100);
     let mut session = open(&netlist, Vec::new(), BUDGET);
-    let status = session.advance_to(Time::from_ps(3400 * MS));
-    let at = ends_at_the_first_tbtt(&session, status);
-    assert!((3270..3280).contains(&(at.as_ps() / MS)), "{at:?}");
-    assert!(
-        session.diagnostics().is_empty(),
-        "{:?}",
-        session.diagnostics()
-    );
+    let status = session.advance_to(Time::from_ps(9100 * MS));
+    runs_to_its_stop(&session, status);
     let text = printed(&session);
     assert!(
-        text.ends_with("scan 1\nap orbe ch 6\n"),
+        text.ends_with("scan 1\nap orbe ch 6\nip 192.168.1.100\ntime 2026-03-14\n"),
         "UART0 output:\n{text}"
     );
 
     let sta = Mac(STA);
+    let router = Ipv4Addr::new(192, 168, 1, 1);
+    let rows = joined(&session);
+    let [.., Event::Sntp { utc_ms, .. }] = rows[..] else {
+        panic!("{rows:?}");
+    };
     assert_eq!(
-        joined(&session),
+        rows,
         [
             Event::Auth { sta, status: 0 },
             Event::Assoc {
@@ -437,8 +434,20 @@ fn the_stock_station_joins_the_network_leases_an_address_and_ends_at_its_first_t
                 sta,
                 ip: Ipv4Addr::new(192, 168, 1, 100)
             },
+            Event::Dns {
+                sta,
+                name: "pool.ntp.org".into(),
+                answer: Some(router)
+            },
+            Event::Sntp { sta, utc_ms },
         ]
     );
+    let asked = (session.network_rows().iter())
+        .find(|row| matches!(row.event, Event::Sntp { .. }))
+        .map(|row| row.at.as_ps() / MS)
+        .expect("the SNTP row");
+    assert_eq!(utc_ms, 1_773_480_360_000 + asked);
+    assert!((8990..9000).contains(&asked), "{asked} ms");
     assert!(
         (session.network_rows().iter()).any(|row| row.event == Event::Doze { sta }),
         "power save"
@@ -494,16 +503,21 @@ fn the_stock_station_joins_the_network_leases_an_address_and_ends_at_its_first_t
 /// When the station's Authentication reaches the network but the ACK does not reach the
 /// station, its MAC reports an ACK timeout and the driver sends the same frame again, with the
 /// same sequence number and the Retry bit set, after the ACK would have ended. The network
-/// answers both, and the join goes on to the same lease and the same end.
+/// answers both, and the join goes on to the same lease, which the sketch prints.
 #[test]
 fn a_lost_ack_has_the_driver_send_the_authentication_again_with_the_retry_bit() {
-    let netlist = station(NETWORK, 3400);
+    let netlist = station(NETWORK, 4300);
     let mut session = open(&netlist, Vec::new(), BUDGET);
     session.actives.lose_acks(|frame| {
         frame.mpdu[0] == 0xb0 && frame.mpdu[1] & RETRY == 0 && frame.mpdu[10..16] == STA
     });
-    let status = session.advance_to(Time::from_ps(3400 * MS));
-    ends_at_the_first_tbtt(&session, status);
+    let status = session.advance_to(Time::from_ps(4300 * MS));
+    runs_to_its_stop(&session, status);
+    let text = printed(&session);
+    assert!(
+        text.ends_with("ip 192.168.1.100\n"),
+        "UART0 output:\n{text}"
+    );
 
     let sent = sent_to_the_ap(&session);
     let auth: Vec<&AirFrame> = sent.iter().filter(|f| f.mpdu[0] == 0xb0).collect();
@@ -534,4 +548,52 @@ fn a_lost_ack_has_the_driver_send_the_authentication_again_with_the_retry_bit() 
             },
         ]
     );
+}
+
+/// From the first doze at about 3.261 s, the station wakes at each TBTT, hears the beacon and
+/// dozes again, and wakes to send lwIP's first ARP probes and its power-save frames. The run
+/// gives the same frames on the air, the same network rows and the same output whether it
+/// goes straight through or in steps of 1.013 ms from 3.2 s.
+#[test]
+fn the_station_dozes_and_wakes_the_same_however_the_run_splits() {
+    let end = 3_800 * MS;
+    let run = |step: Option<u64>| {
+        let netlist = station(NETWORK, 3_800);
+        let mut session = open(&netlist, Vec::new(), BUDGET);
+        if let Some(step) = step {
+            let mut at = 3_200 * MS;
+            while at < end {
+                assert_eq!(session.advance_to(Time::from_ps(at)), Status::Running);
+                at += step;
+            }
+        }
+        let status = session.advance_to(Time::from_ps(end));
+        runs_to_its_stop(&session, status);
+        let mut aired: Vec<AirFrame> = Vec::new();
+        for (_, frame) in session.actives.aired() {
+            if frame.start.as_ps() >= 3_200 * MS && !aired.iter().any(|f| f.end == frame.end) {
+                aired.push(frame.clone());
+            }
+        }
+        (printed(&session), session.network_rows().to_vec(), aired)
+    };
+    let straight = run(None);
+    let sta = Mac(STA);
+    let rows = &straight.1;
+    let at = |event: &Event| {
+        rows.iter()
+            .find(|row| row.event == *event)
+            .map(|row| row.at)
+    };
+    let doze = at(&Event::Doze { sta }).expect("a doze");
+    assert!((3255..3265).contains(&(doze.as_ps() / MS)), "{doze:?}");
+    assert!(
+        rows.iter()
+            .any(|row| row.at > doze && row.event == Event::Wake { sta })
+    );
+    let beacons = (straight.2.iter())
+        .filter(|f| f.mpdu[0] == 0x80 && f.start > doze)
+        .count();
+    assert!(beacons >= 4, "{beacons} beacons");
+    assert!(run(Some(1_013_000_000)) == straight, "in steps");
 }

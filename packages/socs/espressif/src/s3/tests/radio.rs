@@ -1,9 +1,9 @@
 //! Whole-chip tests for a chip built with its Wi-Fi radio: the radio's words are kept and read
 //! back, a chip without it refuses them as before, the PHY's write of `SENS_IOMUX_CLK_EN` is not
-//! listed, a frame the MAC sends ends in a record halt, and the run ends where an armed TBTT
-//! would raise the power interrupt, even at the store that armed it, or not at all once a
-//! store disarms it, however the run is split.
-
+//! listed, a frame the MAC sends ends in a record halt, an armed TBTT raises the power interrupt
+//! the core takes, even at the store that armed it, or not at all once a store disarms it, and
+//! with its RF powered down for modem sleep the radio sends nothing until it wakes, however the
+//! run is split.
 use super::*;
 
 const FE_IQ_EST: u32 = 0x6000_6174;
@@ -103,15 +103,45 @@ const PLCP0: u32 = 0x6003_3d08;
 const DESCRIPTOR: u32 = 0x3fcb_3a58;
 const BUFFER: u32 = 0x3fcb_3a88;
 
-/// Tunes channel 1, then sends a 20-octet frame to everyone from queue 0 at 1 Mb/s.
+/// `RTC_CNTL_ANA_CONF_REG`, as `rom_open_i2c_xpd` leaves it with the RF powered, and as
+/// `rom_phy_xpd_rf` leaves it for modem sleep, with RFRX_PBUS and TXRF powered down.
+const ANA_CONF: u32 = RTC_CNTL + 0x34;
+const RF_ON: u32 = 0xf840_0000;
+const RF_OFF: u32 = 0x2040_0000;
+/// `RTC_CNTL_ANA_CONF_REG` as the boot leaves it, with the RF not yet powered.
+const RF_BOOT: u32 = 0x0040_0000;
+
+/// Powers the RF and tunes channel 1, then sends a 20-octet frame to everyone from queue 0 at
+/// 1 Mb/s.
 fn send() -> Esp32s3 {
+    sent_after(&[])
+}
+
+/// Powers the RF and tunes channel 1, makes `between`'s stores with `PASSES` of a count down
+/// after each, then sends the frame [`send`] sends.
+fn sent_after(between: &[(u32, u32)]) -> Esp32s3 {
     let plcp0 = 0xc000_0000 | DESCRIPTOR & 0xf_ffff;
-    let mut program = Program::new(&[FREQ, (1 << 8) | (2 * 12), PLCP1, 24, PLCP0, plcp0]);
-    for k in 0..3 {
-        program.l32r(2, 2 * k).l32r(3, 2 * k + 1).rri8(6, 3, 2, 0);
+    let mut words = vec![ANA_CONF, RF_ON, FREQ, (1 << 8) | (2 * 12), PASSES];
+    words.extend(between.iter().flat_map(|&(at, value)| [at, value]));
+    words.extend([PLCP1, 24, PLCP0, plcp0]);
+    let mut program = Program::new(&words);
+    let store = |program: &mut Program, k: usize| {
+        program.l32r(2, k).l32r(3, k + 1).rri8(6, 3, 2, 0);
+    };
+    store(&mut program, 0);
+    store(&mut program, 2);
+    for k in 0..between.len() {
+        store(&mut program, 5 + 2 * k);
+        program.l32r(4, 4);
+        let down = program.pc();
+        program.addi(4, 4, -1).bnez(4, down);
     }
+    let sends = 5 + 2 * between.len();
+    store(&mut program, sends);
+    store(&mut program, sends + 2);
     program.raw(&LOOP);
     let mut chip = program.chip();
+    chip.soc.restore(ANA_CONF, RF_BOOT);
     chip.use_radio();
     let head: u32 = 1 << 31 | 1 << 30 | 24 << 12 | 24;
     let mut descriptor = Vec::new();
@@ -179,21 +209,30 @@ const TBTT_TIMING: u32 = 0x6003_5030;
 const TSF_CONTROL: u32 = 0x6003_500c;
 const TBTT_CONTROL: u32 = 0x6003_5028;
 const PWR_ENABLE: u32 = 0x6003_5110;
+/// The interrupt matrix's word for the power interrupt's source, and the level-1 vector the
+/// core jumps to when it takes the CPU interrupt 1 that word routes it to. Nothing is mapped
+/// there, so the fetch ends the run where the core took it.
+const PWR_ROUTE: u32 = 0x600c_2000 + 4 * wifi::PWR_SOURCE;
+const VECTOR: u32 = 0x4000_0300;
 /// The timing of a TBTT every `tu` TU, 10 us ahead.
 const fn every(tu: u32) -> u32 {
     10 << 16 | tu
 }
 /// The passes of the count down between the arming and the late store.
 const PASSES: u32 = 3_000;
-/// Where the TBTT every TU from TSF 0 would first raise the power interrupt: 10 us before
-/// 1024 us.
+/// Where the TBTT every TU from TSF 0 first raises the power interrupt: 10 us before 1024 us.
 const TBTT_AT: u64 = 1014 * 40;
+/// Where the core, counting up, then fetches the vector of the interrupt it takes.
+const TAKEN_AT: u64 = TBTT_AT + 4;
 
-/// Sets a TBTT at TSF 0 with `timing` and latches it, as `hal_set_sta_tbtt` does, then enables
-/// TBTT 0 and its interrupt, as `hal_enable_sta_tbtt` does. It counts `PASSES` down, makes the
-/// store `late` if any, and then counts up without end, so no fetch spins.
+/// Routes the power interrupt to CPU interrupt 1 and enables that at level 0, then sets a TBTT
+/// at TSF 0 with `timing` and latches it, as `hal_set_sta_tbtt` does, and enables TBTT 0 and its
+/// interrupt, as `hal_enable_sta_tbtt` does. It counts `PASSES` down, makes the store `late` if
+/// any, and then counts up without end, so no fetch spins.
 fn armed_then(timing: u32, late: Option<(u32, u32)>) -> Esp32s3 {
     let mut words = vec![
+        PWR_ROUTE,
+        1,
         TBTT_TIMING,
         timing,
         TBTT,
@@ -208,14 +247,15 @@ fn armed_then(timing: u32, late: Option<(u32, u32)>) -> Esp32s3 {
     ];
     words.extend(late.into_iter().flat_map(|(at, value)| [at, value]));
     let mut program = Program::new(&words);
-    for k in 0..5 {
+    program.movi(7, 2).wsr(7, INTENABLE).movi(7, 0).wsr(7, PS);
+    for k in 0..6 {
         program.l32r(2, 2 * k).l32r(3, 2 * k + 1).s32i(3, 2, 0);
     }
-    program.l32r(4, 10);
+    program.l32r(4, 12);
     let down = program.pc();
     program.addi(4, 4, -1).bnez(4, down);
     if late.is_some() {
-        program.l32r(2, 11).l32r(3, 12).s32i(3, 2, 0);
+        program.l32r(2, 13).l32r(3, 14).s32i(3, 2, 0);
     }
     let up = program.pc();
     program.addi(5, 5, 1).j(up);
@@ -224,11 +264,22 @@ fn armed_then(timing: u32, late: Option<(u32, u32)>) -> Esp32s3 {
     chip
 }
 
-/// A run of [`armed_then`]: its name, its chip, and where it ends as `tbtt`, if it does.
+/// Where the core took the power interrupt, if the run's halts are that one fetch of the
+/// vector.
+fn taken(seen: &[Halt]) -> Option<Tick> {
+    match seen {
+        [] => None,
+        [Halt::Fault(at, Fault::UnmappedFetch(pc))] if *pc == pro(VECTOR) => Some(*at),
+        _ => panic!("{seen:?}"),
+    }
+}
+
+/// A run of [`armed_then`]: its name, its chip, and where the core takes the interrupt, if it
+/// does.
 struct TbttRun {
     name: &'static str,
     chip: fn() -> Esp32s3,
-    ends: Option<Tick>,
+    taken: Option<Tick>,
 }
 
 /// The three runs: armed to the end, disarmed by the late store, and re-timed by it from 2 TU
@@ -238,17 +289,17 @@ fn tbtt_runs() -> [TbttRun; 3] {
         TbttRun {
             name: "armed",
             chip: || armed_then(every(1), None),
-            ends: Some(c(TBTT_AT)),
+            taken: Some(c(TAKEN_AT)),
         },
         TbttRun {
             name: "disarmed",
             chip: || armed_then(every(1), Some((PWR_ENABLE, 0))),
-            ends: None,
+            taken: None,
         },
         TbttRun {
             name: "retimed",
             chip: || armed_then(every(2), Some((TBTT_TIMING, every(1)))),
-            ends: Some(c(TBTT_AT)),
+            taken: Some(c(TAKEN_AT)),
         },
     ]
 }
@@ -256,23 +307,31 @@ fn tbtt_runs() -> [TbttRun; 3] {
 /// The run's limit, two TUs.
 const TBTT_LIMIT: u64 = 80_000;
 
-/// Every halt of a run to `TBTT_LIMIT` cycles, stepped through each limit of `splits` first.
-/// Each halt comes from the first call whose limit reaches it.
-fn halts(mut chip: Esp32s3, splits: &[u64]) -> Vec<Halt> {
+/// Every halt of a run to `limit` cycles, stepped through each limit of `splits` first. Each
+/// halt comes from the first call whose limit reaches it.
+fn halts_to(mut chip: Esp32s3, splits: &[u64], limit: u64) -> Vec<Halt> {
     let mut seen = Vec::new();
     let mut served = None;
-    for &limit in splits.iter().chain([&TBTT_LIMIT]) {
+    for &limit in splits.iter().chain([&limit]) {
         while let Some(halt) = chip.run_until(c(limit)) {
             assert!(
                 served.is_none_or(|served| halt.at() > c(served)),
                 "{halt:?} after a call to {served:?} returned"
             );
             seen.push(halt);
+            if matches!(halt, Halt::Fault(..)) {
+                return seen;
+            }
         }
         served = Some(limit);
     }
     assert_eq!(chip.unmodeled().count(), 0);
     seen
+}
+
+/// [`halts_to`] `TBTT_LIMIT`.
+fn halts(chip: Esp32s3, splits: &[u64]) -> Vec<Halt> {
+    halts_to(chip, splits, TBTT_LIMIT)
 }
 
 /// The cycles at which the radio's TBTT deadline changes, stepping one cycle at a time to
@@ -291,23 +350,18 @@ fn tbtt_moves(mut chip: Esp32s3, until: u64) -> Vec<u64> {
     moves
 }
 
-/// The one-shot run ends as `tbtt` where the TBTT would first raise the power interrupt, or not
-/// at all when the late store disarmed it, although the program never spins, so nothing but the
-/// deadline stops the core there.
+/// The one-shot run ends where the core takes the power interrupt the TBTT raised, or not at
+/// all when the late store disarmed it, although the program never spins, so nothing but the
+/// interrupt stops the core there.
 #[test]
-fn a_straight_run_ends_at_the_tbtt_it_armed_and_not_at_one_it_disarmed() {
-    for TbttRun { name, chip, ends } in tbtt_runs() {
-        let seen = halts(chip(), &[]);
-        match (ends, &seen[..]) {
-            (None, []) => {}
-            (Some(at), [Halt::Fault(fault_at, Fault::Refused(refused, _))]) => {
-                assert_eq!(
-                    (*fault_at, *refused),
-                    (at, Refused::Register("RADIO", "tbtt"))
-                );
-            }
-            _ => panic!("{name}: {seen:?}"),
-        }
+fn a_straight_run_takes_the_interrupt_of_the_tbtt_it_armed_and_not_of_one_it_disarmed() {
+    for TbttRun {
+        name,
+        chip,
+        taken: at,
+    } in tbtt_runs()
+    {
+        assert_eq!(taken(&halts(chip(), &[])), at, "{name}");
     }
 }
 
@@ -333,7 +387,7 @@ fn a_chunked_run_ends_as_the_straight_run_does() {
 }
 
 /// Every split gives the straight run's halts: each cycle around the arming, the late store
-/// and the deadline, and every 997th cycle, alone and in pairs.
+/// and the interrupt, and every 997th cycle, alone and in pairs.
 #[test]
 fn every_split_of_a_tbtt_run_ends_as_the_straight_run_does() {
     for TbttRun { name, chip, .. } in tbtt_runs() {
@@ -380,29 +434,23 @@ fn every_split_of_a_tbtt_run_ends_as_the_straight_run_does() {
 }
 
 /// With no ahead time, a TBTT every TU from TSF 0 armed at TSF 0 falls due at the arming store
-/// itself. The call whose limit reaches the store ends the run there, at every split around it.
+/// itself, and the core fetches its interrupt's vector five cycles later, after the store and
+/// the load that follows it, at every split around it.
 #[test]
-fn a_tbtt_due_at_its_arming_store_ends_the_call_that_ran_it() {
+fn a_tbtt_due_at_its_arming_store_raises_the_interrupt_there() {
     let chip = || armed_then(1, None);
     let arming = tbtt_moves(chip(), 100)[0];
     let straight = halts(chip(), &[]);
-    let [Halt::Fault(at, Fault::Refused(refused, _))] = straight[..] else {
-        panic!("{straight:?}");
-    };
-    assert_eq!(
-        (at, refused),
-        (c(arming), Refused::Register("RADIO", "tbtt"))
-    );
+    assert_eq!(taken(&straight), Some(c(arming + 5)));
     for split in 1..arming + 12 {
         assert_eq!(halts(chip(), &[split]), straight, "split at {split}");
     }
 }
 
 /// The TBTTs fall at the TSF's whole TUs, so the first one the arming lets through is at
-/// 1024 us, and its interrupt would come 10 us before. The run ends there by name, however it
-/// steps. Disarmed, it runs on.
+/// 1024 us, and its interrupt comes 10 us before, however the run steps. Disarmed, it runs on.
 #[test]
-fn the_run_ends_where_an_armed_tbtt_would_raise_the_power_interrupt() {
+fn the_core_takes_the_power_interrupt_where_an_armed_tbtt_raises_it() {
     let run = |step: u64| {
         let mut chip = armed_then(every(1), None);
         let mut limit = 0;
@@ -414,15 +462,65 @@ fn the_run_ends_where_an_armed_tbtt_would_raise_the_power_interrupt() {
         }
     };
     let halt = run(100_000);
-    let Halt::Fault(at, Fault::Refused(refused, _)) = halt else {
-        panic!("{halt:?}");
-    };
-    assert_eq!(at, c(TBTT_AT));
-    assert_eq!(refused, Refused::Register("RADIO", "tbtt"));
-    for step in [1_000, 7_777, 40_559, 40_560] {
+    assert_eq!(taken(&[halt]), Some(c(TAKEN_AT)));
+    for step in [1_000, 7_777, 40_559, 40_560, 40_561] {
         assert_eq!(run(step), halt, "step {step}");
     }
 
     let mut chip = armed_then(every(1), Some((PWR_ENABLE, 0)));
     assert_eq!(chip.run_until(c(100_000)), None);
+}
+
+/// Modem sleep as `ram_phy_close_rf` and `phy_wakeup_init` make it: `rom_phy_xpd_rf` powers
+/// RFRX_PBUS and TXRF down, and `rom_open_i2c_xpd` powers them up again. Dozing, the radio is
+/// tuned to no channel, and a frame it sends ends the run by name at its PLCP0 store. Awake
+/// again, it is back on channel 1 and the frame ends in a record halt, however the run splits.
+#[test]
+fn a_dozing_radio_refuses_to_send_and_an_awake_one_sends_however_the_run_splits() {
+    let limit = 60_000;
+    for (name, between) in [
+        ("dozing", &[(ANA_CONF, RF_OFF)][..]),
+        ("woken", &[(ANA_CONF, RF_OFF), (ANA_CONF, RF_ON)][..]),
+    ] {
+        // Tuned once the PLL starts, then on no channel from the power-down, and on channel 1
+        // again from the wake after the count.
+        let mut chip = sent_after(between);
+        let mut tuned = vec![(0, None)];
+        for cycle in 1..limit {
+            chip.run_until(c(cycle));
+            let now = chip.soc.radio().and_then(wifi::Radio::tuned);
+            if tuned.last().is_some_and(|&(_, last)| last != now) {
+                tuned.push((cycle, now));
+            }
+        }
+        let channels: Vec<Option<u8>> = tuned.iter().map(|&(_, channel)| channel).collect();
+        let want = if between.len() == 1 {
+            vec![None, Some(1), None]
+        } else {
+            vec![None, Some(1), None, Some(1)]
+        };
+        assert_eq!(channels, want, "{name}: {tuned:?}");
+        assert!(tuned[2].0 < 100 && tuned.get(3).is_none_or(|&(at, _)| at > 9_000));
+        let straight = halts_to(sent_after(between), &[], limit);
+        match (name, &straight[..]) {
+            ("dozing", [Halt::Fault(_, Fault::Refused(refused, _))]) => {
+                assert_eq!(*refused, Refused::Register("RADIO", "tx_rf_off"));
+            }
+            ("woken", [Halt::Change { record: true, .. }]) => {}
+            _ => panic!("{name}: {straight:?}"),
+        }
+        let at = straight[0].at().0 / XTAL;
+        let mut splits: Vec<u64> = (1..limit / 997).map(|k| k * 997).collect();
+        splits.extend(at.saturating_sub(12)..at + 12);
+        for &(at, _) in &tuned[1..] {
+            splits.extend(at.saturating_sub(12)..at + 12);
+        }
+        for split in splits {
+            assert_eq!(
+                halts_to(sent_after(between), &[split], limit),
+                straight,
+                "{name}: split at {split}"
+            );
+        }
+    }
 }
