@@ -513,7 +513,13 @@ impl Session {
         // takes there, which no part carries. The first accepted step is the first sample. Supply
         // watches still note whether t = 0 sits cleanly off or in range so a fast power-up or
         // power-down from t = 0 is recognized as a power cycle.
-        let mut ratings = Ratings::new(&circuit.netlist, &circuit.actives, &columns, Timing::Run);
+        let mut ratings = Ratings::new(
+            &circuit.netlist,
+            &circuit.actives,
+            circuit.gate_states(),
+            &columns,
+            Timing::Run,
+        );
         ratings.seed_supplies(&row);
         ratings.seed_temperatures(&row, circuit.netlist.world());
         let inputs = Inputs::new(&circuit.netlist, &circuit.actives, &columns);
@@ -692,11 +698,12 @@ impl Session {
     fn rating_probe<'a>(&'a self, probe: &'a Probe<'_>) -> (Option<Sample<'a>>, bool) {
         let cores = self.actives.cores();
         match &self.state {
-            State::Running { accepted, .. } if probe.at() > accepted.at => {
-                (Some((probe.at(), probe.values(), cores)), false)
-            }
+            State::Running { accepted, .. } if probe.at() > accepted.at => (
+                Some((probe.at(), probe.values(), cores, &accepted.chips)),
+                false,
+            ),
             State::Running { accepted, next, .. } if accepted.at == Time::ZERO => {
-                (Some((next.at, &next.row, cores)), true)
+                (Some((next.at, &next.row, cores, &accepted.chips)), true)
             }
             _ => (None, false),
         }
@@ -1257,11 +1264,16 @@ impl Session {
         if let Err(fault) = landed {
             return self.ended(accepted.at, accepted.row, End::Fault(fault));
         }
-        // The landing was solved with the drive the cores hold until `land` below.
+        // The landing was solved with the drive the cores hold until `land` below, and with the
+        // accepted chip states.
         self.ratings
             .sample_temperatures(landing.at, &landing.row, self.circuit.netlist.world());
-        self.ratings
-            .sample(landing.at, &landing.row, self.actives.cores());
+        self.ratings.sample(
+            landing.at,
+            &landing.row,
+            self.actives.cores(),
+            &accepted.chips,
+        );
         self.inputs.sample(
             landing.at,
             &landing.row,

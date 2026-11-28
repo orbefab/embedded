@@ -11,8 +11,9 @@
 //! Each delay is the typical at VCC = 4.5 V, CL = 50 pF and 25 C, section 6.7.
 //! A drive changes in `run_until`, after the edge that caused it.
 //!
-//! Below [`MIN_VCC_V`] the host releases every output, and the device ignores its
-//! inputs, so a supply that returns has not shifted.
+//! Once the supply rises to [`MIN_VCC_V`] the host drives the outputs and the device reads its
+//! inputs. Once it falls below [`RELEASE_VCC_V`] the host releases every output and the device
+//! ignores its inputs, so a supply that returns has not shifted.
 
 use orbe_model::{Cx, Device, Drive, Drives, Error, Levels, Params, State, Stop, Time};
 
@@ -42,8 +43,11 @@ pub const CLEAR_PS: u64 = 18_000;
 pub const ENABLE_PS: u64 = 15_000;
 /// `OE` high to the outputs off, tdis typical.
 pub const DISABLE_PS: u64 = 23_000;
-/// Recommended minimum supply, section 6.3. The host releases the outputs below it.
+/// Recommended minimum supply, section 6.3. The chip powers up once its supply rises to it.
 pub const MIN_VCC_V: f64 = 2.0;
+/// The chip powers down once its supply falls below this. The sheet gives no power-on reset or
+/// hysteresis, so the 0.2 V band is a guess.
+pub const RELEASE_VCC_V: f64 = 1.8;
 
 /// Bit 0 is the first stage (`QA`). Bit 7 is the last (`QH` and `QHp`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -103,6 +107,7 @@ impl Hc595 {
 
 impl Device for Hc595 {
     const MIN_SUPPLY_V: Option<f64> = Some(MIN_VCC_V);
+    const RELEASE_SUPPLY_V: Option<f64> = Some(RELEASE_VCC_V);
 
     fn new(_params: &Params<'_>) -> Result<Hc595, Error> {
         Ok(Hc595::power_on())

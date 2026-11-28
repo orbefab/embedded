@@ -20,9 +20,14 @@ use orbe_model::{
     Time, View,
 };
 
-/// Watch order: `DIN`, then the supply comparator when the part sets `min_supply`.
+/// Watch order: `DIN`, then the supply watch when the part sets `min_supply`: high once the supply
+/// rises to `min_supply`, low once it falls below [`RELEASE_FRACTION`] of it.
 pub const WATCH_DIN: usize = 0;
 pub const WATCH_SUPPLY: usize = 1;
+
+/// The share of `min_supply` below which the chain powers down, until the supply rises to
+/// `min_supply` again. Neither sheet gives a power-on reset or hysteresis, so the band is a guess.
+pub const RELEASE_FRACTION: f64 = 0.9;
 
 /// The most LEDs one part holds.
 pub const LED_MAX: u16 = 1024;
@@ -223,6 +228,10 @@ impl<const N: usize> Device for Ws2812<N> {
         self.min_supply_v
     }
 
+    fn release_supply_v(&self) -> Option<f64> {
+        self.min_supply_v.map(|min| RELEASE_FRACTION * min)
+    }
+
     /// Stops at each `DOUT` edge.
     fn run_until(&mut self, _cx: &mut Cx, limit: Time) -> Option<Stop> {
         let Some(at) = self.next_edge().filter(|&at| at <= limit) else {
@@ -267,6 +276,13 @@ impl<const N: usize> Device for Ws2812<N> {
     fn draw(&self) -> Draw {
         Draw {
             amps: f64::from(self.count) * self.idle + self.channel * f64::from(self.lit) / 255.0,
+            holds_above_v: self.holds_above_v,
+        }
+    }
+
+    fn released_draw(&self) -> Draw {
+        Draw {
+            amps: f64::from(self.count) * self.idle,
             holds_above_v: self.holds_above_v,
         }
     }

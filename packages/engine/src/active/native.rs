@@ -21,8 +21,12 @@ pub(crate) trait Hosted: Send + fmt::Debug {
     fn drive(&self) -> &[Drive];
     /// [`orbe_model::Device::MIN_SUPPLY_V`] for this device.
     fn min_supply_v(&self) -> Option<f64>;
+    /// [`orbe_model::Device::release_supply_v`] for this device.
+    fn release_supply_v(&self) -> Option<f64>;
     /// The device's draw at its last stop, which the stamp reads.
     fn draw(&self) -> Draw;
+    /// [`orbe_model::Device::released_draw`] for this device.
+    fn released_draw(&self) -> Draw;
     fn sample(&mut self, world: &World, at: Time, volts: &[f64]);
     fn input(&mut self, world: &World, at: Time, levels: &[bool]);
     fn event(&mut self, world: &World, at: Time, event: Event<'_>);
@@ -625,8 +629,16 @@ impl<D: Device, P: Port<D>> Hosted for Native<D, P> {
         self.dev.device.min_supply_v()
     }
 
+    fn release_supply_v(&self) -> Option<f64> {
+        self.dev.device.release_supply_v()
+    }
+
     fn draw(&self) -> Draw {
         self.draw
+    }
+
+    fn released_draw(&self) -> Draw {
+        self.dev.device.released_draw()
     }
 
     fn sample(&mut self, world: &World, at: Time, volts: &[f64]) {

@@ -124,7 +124,14 @@ pub(crate) fn chip(part: PartId, dev: &Hd44780) -> Chip {
         })
     };
     let mut watches: Vec<Watch> = BUS_PINS.into_iter().map(watch).collect();
-    watches.push(across(VDD, VSS, model::MIN_VDD_V));
+    let powered = |volts: f64| Signal {
+        terms: vec![(Node::from(pins[VDD]), 1.0), (Node::from(pins[VSS]), -1.0)],
+        offset: volts - BOUND_INSIDE_V,
+    };
+    watches.push(Watch {
+        rise: powered(model::MIN_VDD_V),
+        fall: powered(model::RELEASE_VDD_V),
+    });
     watches.push(across(VDD, VSS, VDD_FAST_V));
     watches.push(across(VDD, V0, dev.lcd_voltage.si.get()));
     watches.push(across(A, K, dev.backlight_voltage.si.get()));

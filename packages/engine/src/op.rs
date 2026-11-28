@@ -27,26 +27,34 @@ const SETTLE_ROUNDS: u32 = 8;
 /// The operating point, with a finding per rating it breaks.
 pub(crate) fn run(netlist: &Netlist, diagnostics: &mut Vec<Diagnostic>) -> Option<OpPoint> {
     let columns = Columns::new(netlist);
-    let (circuit, cores, row) = match solve(netlist, &columns) {
+    let (circuit, cores, states, row) = match solve(netlist, &columns) {
         Ok(solved) => solved,
         Err(diagnostic) => {
             diagnostics.push(diagnostic);
             return None;
         }
     };
-    let mut ratings = Ratings::new(netlist, &circuit.actives, &columns, Timing::Point);
-    ratings.sample(Time::ZERO, &row, &cores);
+    let mut ratings = Ratings::new(
+        netlist,
+        &circuit.actives,
+        circuit.gate_states(),
+        &columns,
+        Timing::Point,
+    );
+    ratings.sample(Time::ZERO, &row, &cores, &states);
     ratings.seed_temperatures(&row, netlist.world());
     diagnostics.extend(ratings.findings());
     diagnostics.extend(ratings.temperatures(netlist.world(), None));
     Some(observe::op_point(&columns, &row))
 }
 
-/// The operating point's row, with the circuit and the power-on cores it was solved with.
+/// The operating point's row, with the circuit, the power-on cores and the chip states it was
+/// solved with.
+#[allow(clippy::type_complexity)]
 fn solve(
     netlist: &Netlist,
     columns: &Columns,
-) -> Result<(Circuit, Vec<active::Core>, Vec<Finite>), Diagnostic> {
+) -> Result<(Circuit, Vec<active::Core>, Vec<chip::State>, Vec<Finite>), Diagnostic> {
     let circuit = Circuit::new(netlist.clone())?;
     let start = Iterate::initial(&circuit);
     let cores = Actives::power_on(&circuit);
@@ -68,7 +76,7 @@ fn solve(
         Time::ZERO,
         Side::Before,
     )?;
-    Ok((circuit, cores, row))
+    Ok((circuit, cores, settled.chips, row))
 }
 
 /// A solve the chips agree with: its chip states, and the levels they read on it.
@@ -136,10 +144,10 @@ pub(crate) fn settle(
             });
         }
         changed = circuit
-            .chips()
+            .state_parts()
             .zip(next.iter().zip(&chips))
             .filter(|(_, (new, old))| new != old)
-            .map(|((id, _), _)| Ref::Part(circuit.netlist.part(id).name.clone()))
+            .map(|(id, _)| Ref::Part(circuit.netlist.part(id).name.clone()))
             .collect();
         chips = next;
         start = iterate;
@@ -515,98 +523,5 @@ mod tests {
         let unloaded = g1 * 5.0 / (g1 + g2);
         assert!((vout - expected).abs() <= 1e-9, "{vout} vs {expected}");
         assert!(vout < unloaded, "{vout} was not pulled below {unloaded}");
-    }
-
-    #[test]
-    fn newton_re_stamps_when_a_small_step_crosses_min_supply_either_way() {
-        let make = |vcc: f64| {
-            let json = format!(
-                r#"{{
-                  "version": 1,
-                  "seed": 0,
-                  "analysis": {{ "op": {{}} }},
-                  "ground": "gnd",
-                  "nets": ["gnd", "five", "vcc", "qa"],
-                  "parts": [
-                    {{ "name": "five", "kind": "voltage_source", "pins": {{ "p": "five", "n": "gnd" }}, "voltage": {{ "value": 5.0, "unit": "V" }} }},
-                    {{ "name": "vcc", "kind": "voltage_source", "pins": {{ "p": "vcc", "n": "gnd" }}, "voltage": {{ "value": {vcc}, "unit": "V" }} }},
-                    {{ "name": "r_load", "kind": "resistor", "pins": {{ "a": "vcc", "b": "gnd" }}, "resistance": {{ "value": 100.0, "unit": "ohm" }}, "ratings": {{ "power": null }} }},
-                    {{ "name": "r_qa", "kind": "resistor", "pins": {{ "a": "five", "b": "qa" }}, "resistance": {{ "value": 10000.0, "unit": "ohm" }}, "ratings": {{ "power": null }} }},
-                    {{
-                      "name": "u1", "kind": "hc595",
-                      "pins": {{
-                        "QB": "gnd", "QC": "gnd", "QD": "gnd", "QE": "gnd", "QF": "gnd", "QG": "gnd", "QH": "gnd",
-                        "GND": "gnd", "QHp": "gnd", "SRCLR": "five", "SRCLK": "gnd", "RCLK": "gnd",
-                        "OE": "gnd", "SER": "gnd", "QA": "qa", "VCC": "vcc"
-                      }},
-                      "output": {{
-                        "high_drop": {{ "value": 0.0, "unit": "V" }}, "high_resistance": {{ "value": 25.0, "unit": "ohm" }},
-                        "low_drop": {{ "value": 0.0, "unit": "V" }}, "low_resistance": {{ "value": 25.0, "unit": "ohm" }}
-                      }},
-                      "serial_output": {{
-                        "high_drop": {{ "value": 0.0, "unit": "V" }}, "high_resistance": {{ "value": 50.0, "unit": "ohm" }},
-                        "low_drop": {{ "value": 0.0, "unit": "V" }}, "low_resistance": {{ "value": 50.0, "unit": "ohm" }}
-                      }},
-                      "input_threshold": {{ "low": {{ "value": 0.3, "unit": "1" }}, "high": {{ "value": 0.7, "unit": "1" }} }},
-                      "ratings": {{ "pin_current": null, "supply_current": null, "input_margin": null, "output_margin": null }}
-                    }}
-                  ]
-                }}"#
-            );
-            Circuit::new(parse(json.as_bytes())).unwrap()
-        };
-        let below = make(1.999_998_5);
-        let above = make(1.999_999_5);
-        let cores = Actives::power_on(&below);
-        let cond = Conditions {
-            cores: &cores,
-            ..Conditions::NOMINAL
-        };
-        let below_op = newton(
-            &below,
-            &mut Solver::new(&below.layout),
-            &cond,
-            Iterate::initial(&below),
-            OP_BUDGET,
-        )
-        .unwrap();
-        let above_op = newton(
-            &above,
-            &mut Solver::new(&above.layout),
-            &cond,
-            Iterate::initial(&above),
-            OP_BUDGET,
-        )
-        .unwrap();
-
-        // Cross upward by 1 uV (< RELTOL * 2 V = 2 uV) from the converged below-threshold point.
-        let rose = newton(
-            &above,
-            &mut Solver::new(&above.layout),
-            &cond,
-            below_op.iterate.clone(),
-            OP_BUDGET,
-        )
-        .unwrap();
-        let qa_rose = voltage(&above.netlist, &rose.iterate.solution, "qa");
-        assert!(
-            (qa_rose - 5.0 * 25.0 / 10_025.0).abs() < 1e-6,
-            "rising across MIN_SUPPLY_V: QA = {qa_rose}"
-        );
-
-        // Cross downward by 1 uV from the converged above-threshold point.
-        let fell = newton(
-            &below,
-            &mut Solver::new(&below.layout),
-            &cond,
-            above_op.iterate,
-            OP_BUDGET,
-        )
-        .unwrap();
-        let qa_fell = voltage(&below.netlist, &fell.iterate.solution, "qa");
-        assert!(
-            (qa_fell - 5.0).abs() < 1e-4,
-            "falling across MIN_SUPPLY_V: QA = {qa_fell}"
-        );
     }
 }

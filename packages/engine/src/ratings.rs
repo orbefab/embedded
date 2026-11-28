@@ -6,8 +6,12 @@ use orbe_model::{Drive, Time};
 use crate::active::{self, Output, Stage};
 use crate::netlist::{Average, Basis, Model, NetId, Netlist, Rating, RatingKind};
 
-use crate::chip::regulator::{
-    LIMIT_HOLD_PS, LIMIT_KNEE_FRACTION, LIMIT_SAG_FRACTION, MIN_CHARGE_RATE, STALL_PS, limit_drop,
+use crate::chip::{
+    self,
+    regulator::{
+        LIMIT_HOLD_PS, LIMIT_KNEE_FRACTION, LIMIT_SAG_FRACTION, MIN_CHARGE_RATE, STALL_PS,
+        limit_drop,
+    },
 };
 use crate::diagnostic::{
     BodyDiodeExcursion, CurrentLimitExcursion, Diagnostic, Excursion, SupplyExcursion,
@@ -24,8 +28,9 @@ mod temperature;
 /// Every rated quantity of a netlist, checked against each accepted row.
 ///
 /// It reads the observed row, so a part's rating is checked against the number the run
-/// writes. A chip's pin ratings read the row's net voltages and the drive its core had in
-/// force for that row, and work out each pin's current the way `active::stamp` stamps it.
+/// writes. A chip's pin ratings read the row's net voltages and the drive its core and its
+/// supply gate had in force for that row, and work out each pin's current the way
+/// `active::stamp` stamps it.
 ///
 /// Each current or power rating carries its datasheet's basis. A peak rating is checked on
 /// each sample. A sustained rating bounds the heat a held value makes, so it is checked on a
@@ -133,9 +138,9 @@ pub(crate) const SUPPLY_HOLD_PS: u64 = 1_000_000;
 /// reverse-polarity faults, H-bridge dead-time, and inductive kickback warn.
 pub(crate) const BODY_DIODE_HOLD_PS: u64 = 1_000_000;
 
-/// A probe to sample: its time, the row there, and the cores whose drive the row was solved
+/// A probe to sample: its time, the row there, and the cores and chip states the row was solved
 /// with.
-pub(crate) type Sample<'a> = (Time, &'a [Finite], &'a [active::Core]);
+pub(crate) type Sample<'a> = (Time, &'a [Finite], &'a [active::Core], &'a [chip::State]);
 
 /// A chip's minimum operating supply voltage on one supply pin over its ground.
 pub(crate) struct SupplyMin {
@@ -274,6 +279,8 @@ enum Read {
 struct Gauge {
     /// Its index among the circuit's active chips, which is its core's index.
     active: usize,
+    /// The index of its supply gate's state in a row's chip states, when it has one.
+    gate: Option<usize>,
     outputs: Vec<Pin>,
     /// The columns of its supply and ground nets and its own draw.
     supply: Option<(usize, usize, active::Supply)>,
@@ -566,9 +573,11 @@ fn judge_drive(drive: &mut CoilDrive, at: Time, over_ps: Option<u64>) {
 }
 
 impl Ratings {
+    /// `gates` is, by active slot, the index of its supply gate's state in a row's chip states.
     pub(crate) fn new(
         netlist: &Netlist,
         actives: &[active::Chip],
+        gates: &[Option<usize>],
         columns: &Columns,
         timing: Timing,
     ) -> Ratings {
@@ -649,6 +658,7 @@ impl Ratings {
                 }
                 chips.push(Gauge {
                     active,
+                    gate: gates.get(active).copied().flatten(),
                     outputs: chip
                         .outputs
                         .iter()
@@ -1037,11 +1047,17 @@ impl Ratings {
     /// a voltage outside its window. Each side is compared after both are rounded to 3 significant
     /// digits. The first time over stays; the peak rises. A sample that was over adds the time
     /// until this one to `over_ps`. `cores` are the active chips' cores whose drive was in force
-    /// for `row`. An operating point, [`Timing::Point`], has no duration, so its DC value fills
-    /// each filter.
-    pub(crate) fn sample(&mut self, at: Time, row: &[Finite], cores: &[active::Core]) {
+    /// for `row`, and `states` the chip states. An operating point, [`Timing::Point`], has no
+    /// duration, so its DC value fills each filter.
+    pub(crate) fn sample(
+        &mut self,
+        at: Time,
+        row: &[Finite],
+        cores: &[active::Core],
+        states: &[chip::State],
+    ) {
         for gauge in &mut self.chips {
-            gauge.read(row, &cores[gauge.active]);
+            gauge.read(row, &cores[gauge.active], states);
         }
         self.decays.known.clear();
         let (families, mut step) = self.families_mut(at);
@@ -1243,17 +1259,17 @@ impl Ratings {
     /// they are. When [`Self::quiet_after`] says a sample there would find nothing, nothing is
     /// copied. Otherwise a copy samples it.
     fn through(&self, probe: Option<Sample>) -> Through {
-        let Some((at, row, cores)) =
+        let Some((at, row, cores, states)) =
             probe.filter(|&(at, ..)| self.last.is_none_or(|last| at > last))
         else {
             return Through::Last;
         };
-        let quiet = self.quiet_after(at, row, cores);
+        let quiet = self.quiet_after(at, row, cores, states);
         if quiet && !cfg!(debug_assertions) {
             return Through::Quiet;
         }
         let mut ratings = self.clone();
-        ratings.sample(at, row, cores);
+        ratings.sample(at, row, cores, states);
         if !quiet {
             return Through::Probed(Box::new(ratings));
         }
@@ -1270,10 +1286,16 @@ impl Ratings {
 
     /// Nothing is over now, and a sample of `row` at `at` would leave nothing over and open no
     /// supply episode: each family is [`Family::quiet`] there. It changes nothing.
-    fn quiet_after(&self, at: Time, row: &[Finite], cores: &[active::Core]) -> bool {
+    fn quiet_after(
+        &self,
+        at: Time,
+        row: &[Finite],
+        cores: &[active::Core],
+        states: &[chip::State],
+    ) -> bool {
         let mut chips = self.chips.clone();
         for gauge in &mut chips {
-            gauge.read(row, &cores[gauge.active]);
+            gauge.read(row, &cores[gauge.active], states);
         }
         let mut step = Step {
             at,
@@ -2422,8 +2444,12 @@ impl RegulatorLimit {
 
 impl Gauge {
     /// Each output's current under `drive`, as `active::stamp` stamps its stage at nominal
-    /// sources, and the sums through the supply and ground pins.
-    fn read(&mut self, row: &[Finite], core: &active::Core) {
+    /// sources with its gate's state in `states`, and the sums through the supply and ground
+    /// pins.
+    fn read(&mut self, row: &[Finite], core: &active::Core, states: &[chip::State]) {
+        let released = self
+            .gate
+            .is_some_and(|slot| states[slot] == chip::State::Supply(active::Powered::Off));
         let drive = core.drive();
         debug_assert_eq!(drive.len(), self.outputs.len());
         let (mut supply, mut ground) = (0.0, 0.0);
@@ -2442,8 +2468,7 @@ impl Gauge {
                 from_vcc += (vcc - vp) / ohm;
                 into_gnd += (vp - gnd) / ohm;
             }
-            // The same release as `active::stamp`: below the minimum supply the stage is off.
-            let released = active::supply_released(core, vcc, gnd);
+            // The same release as `active::stamp`: with its gate off the stage is off.
             let drive = if released { Drive::Off } else { drive };
             match drive {
                 Drive::High => from_vcc += (vcc - pin.high.drop - vp) / pin.high.resistance,
@@ -2475,7 +2500,12 @@ impl Gauge {
             ground += own;
         }
         if let Some((vcc, gnd)) = self.draw {
-            let (amps, _) = core.draw().at(row[vcc].get() - row[gnd].get());
+            let draw = if released {
+                core.released_draw()
+            } else {
+                core.draw()
+            };
+            let (amps, _) = draw.at(row[vcc].get() - row[gnd].get());
             supply += amps;
             ground += amps;
         }
@@ -2533,7 +2563,7 @@ mod tests {
     fn ratings(timing: Timing) -> (Ratings, Columns) {
         let netlist = netlist();
         let columns = Columns::new(&netlist);
-        (Ratings::new(&netlist, &[], &columns, timing), columns)
+        (Ratings::new(&netlist, &[], &[], &columns, timing), columns)
     }
 
     const TAU: f64 = DEFAULT_TAU_PS as f64;
@@ -2542,8 +2572,8 @@ mod tests {
     fn exactly_the_limit_is_not_over() {
         let (mut ratings, columns) = ratings(Timing::Run);
         let values = |current| row(&columns, current);
-        ratings.sample(Time::ZERO, &values(0.03), &[]);
-        ratings.sample(Time::from_ps(1), &values(-0.03), &[]);
+        ratings.sample(Time::ZERO, &values(0.03), &[], &[]);
+        ratings.sample(Time::from_ps(1), &values(-0.03), &[], &[]);
         assert!(ratings.findings().is_empty());
     }
 
@@ -2551,10 +2581,10 @@ mod tests {
     fn a_reverse_current_counts_by_magnitude_and_the_peak_follows_later_samples() {
         let (mut ratings, columns) = ratings(Timing::Point);
         let values = |current| row(&columns, current);
-        ratings.sample(Time::ZERO, &values(0.01), &[]);
-        ratings.sample(Time::from_ps(10), &values(-0.04), &[]);
-        ratings.sample(Time::from_ps(20), &values(0.05), &[]);
-        ratings.sample(Time::from_ps(30), &values(0.045), &[]);
+        ratings.sample(Time::ZERO, &values(0.01), &[], &[]);
+        ratings.sample(Time::from_ps(10), &values(-0.04), &[], &[]);
+        ratings.sample(Time::from_ps(20), &values(0.05), &[], &[]);
+        ratings.sample(Time::from_ps(30), &values(0.045), &[], &[]);
         let found = ratings.findings();
         assert_eq!(
             found,
@@ -2577,12 +2607,12 @@ mod tests {
     fn each_sample_over_the_limit_holds_until_the_next() {
         let (mut ratings, columns) = ratings(Timing::Run);
         let values = |current| row(&columns, current);
-        ratings.sample(Time::ZERO, &values(0.01), &[]);
-        ratings.sample(Time::from_ps(10), &values(0.04), &[]);
-        ratings.sample(Time::from_ps(25), &values(0.05), &[]);
-        ratings.sample(Time::from_ps(30), &values(0.02), &[]);
-        ratings.sample(Time::from_ps(70), &values(0.035), &[]);
-        ratings.sample(Time::from_ps(75), &values(0.031), &[]);
+        ratings.sample(Time::ZERO, &values(0.01), &[], &[]);
+        ratings.sample(Time::from_ps(10), &values(0.04), &[], &[]);
+        ratings.sample(Time::from_ps(25), &values(0.05), &[], &[]);
+        ratings.sample(Time::from_ps(30), &values(0.02), &[], &[]);
+        ratings.sample(Time::from_ps(70), &values(0.035), &[], &[]);
+        ratings.sample(Time::from_ps(75), &values(0.031), &[], &[]);
         let found = ratings.findings();
         let [Diagnostic::RatingCurrent(excursion)] = found.as_slice() else {
             panic!("not one current finding");
@@ -2681,11 +2711,11 @@ mod tests {
     fn a_steady_overload_crosses_its_rating_after_its_share_of_the_time_constant() {
         let (mut ratings, columns) = rms();
         let values = |current| row(&columns, current);
-        ratings.sample(Time::ZERO, &values(0.0), &[]);
-        ratings.sample(Time::from_ps(1), &values(0.069), &[]);
+        ratings.sample(Time::ZERO, &values(0.0), &[], &[]);
+        ratings.sample(Time::from_ps(1), &values(0.069), &[], &[]);
         let step = DEFAULT_TAU_PS / 1_000;
         for k in 1..=5_000 {
-            ratings.sample(Time::from_ps(1 + k * step), &values(0.069), &[]);
+            ratings.sample(Time::from_ps(1 + k * step), &values(0.069), &[], &[]);
         }
         let found = ratings.findings();
         let [Diagnostic::RatingCurrent(excursion)] = found.as_slice() else {
@@ -2713,17 +2743,17 @@ mod tests {
         let (mut ratings, columns) = sustained_as(Average::Mean);
         let values = |current| row(&columns, current);
         let step = DEFAULT_TAU_PS / 1_000;
-        ratings.sample(Time::ZERO, &values(0.0), &[]);
+        ratings.sample(Time::ZERO, &values(0.0), &[], &[]);
         let start = 5 * DEFAULT_TAU_PS;
         let mut at = 1;
         while at < start {
-            ratings.sample(Time::from_ps(at), &values(0.02), &[]);
+            ratings.sample(Time::from_ps(at), &values(0.02), &[], &[]);
             at += step;
         }
         let level = 0.02 * -libm::expm1(-((start - 1) as f64) / TAU);
         // Once the last 2.04 ms average is over too, 1 ms on, the rating is over now.
         for k in 0..=100 {
-            ratings.sample(Time::from_ps(start + k * step), &values(0.05), &[]);
+            ratings.sample(Time::from_ps(start + k * step), &values(0.05), &[], &[]);
         }
         assert!(ratings.findings().is_empty());
         let [excursion] = over_now(&ratings).try_into().unwrap();
@@ -2732,7 +2762,7 @@ mod tests {
         let got = excursion.held_ps.unwrap().get() as f64;
         assert!((got / held - 1.0).abs() < 1e-3, "{got} against {held}");
         for k in 101..=2_000 {
-            ratings.sample(Time::from_ps(start + k * step), &values(0.05), &[]);
+            ratings.sample(Time::from_ps(start + k * step), &values(0.05), &[], &[]);
         }
         let found = ratings.findings();
         let [Diagnostic::RatingCurrent(excursion)] = found.as_slice() else {
@@ -2757,14 +2787,14 @@ mod tests {
         let (mut ratings, columns) = rms();
         ratings.watches[0].set_limit(0.04);
         let values = |current| row(&columns, current);
-        ratings.sample(Time::ZERO, &values(0.0), &[]);
+        ratings.sample(Time::ZERO, &values(0.0), &[], &[]);
         let mut start = 1;
         while start + period <= stop {
-            ratings.sample(Time::from_ps(start), &values(peak), &[]);
-            ratings.sample(Time::from_ps(start + high), &values(0.0), &[]);
+            ratings.sample(Time::from_ps(start), &values(peak), &[], &[]);
+            ratings.sample(Time::from_ps(start + high), &values(0.0), &[], &[]);
             start += period;
         }
-        ratings.sample(Time::from_ps(start), &values(0.0), &[]);
+        ratings.sample(Time::from_ps(start), &values(0.0), &[], &[]);
         ratings.findings()
     }
 
@@ -2826,8 +2856,8 @@ mod tests {
     #[test]
     fn a_run_over_only_at_its_last_row_is_over_for_no_time() {
         let (mut ratings, columns) = ratings(Timing::Run);
-        ratings.sample(Time::ZERO, &row(&columns, 0.0), &[]);
-        ratings.sample(Time::from_ps(9), &row(&columns, 0.5), &[]);
+        ratings.sample(Time::ZERO, &row(&columns, 0.0), &[], &[]);
+        ratings.sample(Time::from_ps(9), &row(&columns, 0.5), &[], &[]);
         let found = ratings.findings();
         let [Diagnostic::RatingCurrent(excursion)] = found.as_slice() else {
             panic!("not one current finding");
@@ -2859,7 +2889,10 @@ mod tests {
         )
         .unwrap();
         let columns = Columns::new(&netlist);
-        (Ratings::new(&netlist, &[], &columns, Timing::Run), columns)
+        (
+            Ratings::new(&netlist, &[], &[], &columns, Timing::Run),
+            columns,
+        )
     }
 
     fn row_power(columns: &Columns, power: f64) -> Vec<Finite> {
@@ -2874,10 +2907,10 @@ mod tests {
     fn a_switching_spike_of_a_few_hundred_nanoseconds_stays_under() {
         let (mut ratings, columns) = power_ratings(2.419);
         let values = |power| row_power(&columns, power);
-        ratings.sample(Time::ZERO, &values(0.0), &[]);
-        ratings.sample(Time::from_ps(2_000), &values(3.008), &[]);
-        ratings.sample(Time::from_ps(2_000 + 136_000), &values(0.0), &[]);
-        ratings.sample(Time::from_ps(DEFAULT_TAU_PS), &values(0.0), &[]);
+        ratings.sample(Time::ZERO, &values(0.0), &[], &[]);
+        ratings.sample(Time::from_ps(2_000), &values(3.008), &[], &[]);
+        ratings.sample(Time::from_ps(2_000 + 136_000), &values(0.0), &[], &[]);
+        ratings.sample(Time::from_ps(DEFAULT_TAU_PS), &values(0.0), &[], &[]);
         assert!(ratings.findings().is_empty());
     }
 
@@ -2887,11 +2920,11 @@ mod tests {
     fn a_held_power_overload_crosses_by_its_share_of_the_time_constant() {
         let (mut ratings, columns) = power_ratings(2.419);
         let values = |power| row_power(&columns, power);
-        ratings.sample(Time::ZERO, &values(0.0), &[]);
-        ratings.sample(Time::from_ps(1), &values(3.0), &[]);
+        ratings.sample(Time::ZERO, &values(0.0), &[], &[]);
+        ratings.sample(Time::from_ps(1), &values(3.0), &[], &[]);
         let step = DEFAULT_TAU_PS / 1_000;
         for k in 1..=5_000 {
-            ratings.sample(Time::from_ps(1 + k * step), &values(3.0), &[]);
+            ratings.sample(Time::from_ps(1 + k * step), &values(3.0), &[], &[]);
         }
         let found = ratings.findings();
         let [Diagnostic::RatingPower(excursion)] = found.as_slice() else {
@@ -2911,14 +2944,14 @@ mod tests {
     fn power_pwm(limit: f64, peak: f64, high: u64, periods: u64) -> Vec<Diagnostic> {
         let (mut ratings, columns) = power_ratings(limit);
         let values = |power| row_power(&columns, power);
-        ratings.sample(Time::ZERO, &values(0.0), &[]);
+        ratings.sample(Time::ZERO, &values(0.0), &[], &[]);
         let mut start = 1;
         for _ in 0..periods {
-            ratings.sample(Time::from_ps(start), &values(peak), &[]);
-            ratings.sample(Time::from_ps(start + high), &values(0.0), &[]);
+            ratings.sample(Time::from_ps(start), &values(peak), &[], &[]);
+            ratings.sample(Time::from_ps(start + high), &values(0.0), &[], &[]);
             start += PWM_490_PS;
         }
-        ratings.sample(Time::from_ps(start), &values(0.0), &[]);
+        ratings.sample(Time::from_ps(start), &values(0.0), &[], &[]);
         ratings.findings()
     }
 
@@ -2967,11 +3000,11 @@ mod tests {
         let (mut ratings, columns) = power_ratings(0.25);
         let values = |power| row_power(&columns, power);
         for k in 0..50 {
-            ratings.sample(Time::from_ps(k * MS), &values(0.0), &[]);
+            ratings.sample(Time::from_ps(k * MS), &values(0.0), &[], &[]);
         }
         let start = 50 * MS;
         for k in 0..=20 {
-            ratings.sample(Time::from_ps(start + k * MS / 10), &values(0.989), &[]);
+            ratings.sample(Time::from_ps(start + k * MS / 10), &values(0.989), &[], &[]);
         }
         assert!(ratings.findings().is_empty());
         let [excursion] = over_now(&ratings).try_into().unwrap();
@@ -2991,7 +3024,7 @@ mod tests {
     #[test]
     fn a_steady_overload_is_over_now_at_its_first_sample() {
         let (mut ratings, columns) = power_ratings(0.25);
-        ratings.sample(Time::from_ps(1), &row_power(&columns, 2.5), &[]);
+        ratings.sample(Time::from_ps(1), &row_power(&columns, 2.5), &[], &[]);
         assert!(ratings.findings().is_empty());
         let [excursion] = over_now(&ratings).try_into().unwrap();
         close(excursion.sample, 2.5);
@@ -3006,11 +3039,16 @@ mod tests {
         let (mut ratings, columns) = power_ratings(2.419);
         let values = |power| row_power(&columns, power);
         for k in 0..=10 {
-            ratings.sample(Time::from_ps(k * MS), &values(0.0), &[]);
+            ratings.sample(Time::from_ps(k * MS), &values(0.0), &[], &[]);
         }
-        ratings.sample(Time::from_ps(10 * MS + 2_000), &values(3.008), &[]);
+        ratings.sample(Time::from_ps(10 * MS + 2_000), &values(3.008), &[], &[]);
         let inside = values(3.0);
-        let probe = Some((Time::from_ps(10 * MS + 70_000), inside.as_slice(), &[][..]));
+        let probe = Some((
+            Time::from_ps(10 * MS + 70_000),
+            inside.as_slice(),
+            &[][..],
+            &[][..],
+        ));
         assert_eq!(ratings.now(probe), []);
         assert_eq!(ratings.now(None), []);
     }
@@ -3023,15 +3061,20 @@ mod tests {
         ratings.watches[0].set_limit(0.04);
         let values = |current| row(&columns, current);
         let high = PWM_490_PS * 128 / 255;
-        ratings.sample(Time::ZERO, &values(0.0), &[]);
+        ratings.sample(Time::ZERO, &values(0.0), &[], &[]);
         let mut start = DEFAULT_TAU_PS;
         for _ in 0..20 {
-            ratings.sample(Time::from_ps(start), &values(0.05), &[]);
+            ratings.sample(Time::from_ps(start), &values(0.05), &[], &[]);
             for k in 1..=10 {
-                ratings.sample(Time::from_ps(start + k * high / 10), &values(0.05), &[]);
+                ratings.sample(
+                    Time::from_ps(start + k * high / 10),
+                    &values(0.05),
+                    &[],
+                    &[],
+                );
                 assert!(over_now(&ratings).is_empty(), "at {start} + {k}");
             }
-            ratings.sample(Time::from_ps(start + high), &values(0.0), &[]);
+            ratings.sample(Time::from_ps(start + high), &values(0.0), &[], &[]);
             start += PWM_490_PS;
         }
         assert_eq!(ratings.findings(), []);
@@ -3045,15 +3088,15 @@ mod tests {
         let (mut ratings, columns) = power_ratings(0.25);
         let values = |power| row_power(&columns, power);
         for k in 0..=50 {
-            ratings.sample(Time::from_ps(k * MS), &values(0.0), &[]);
+            ratings.sample(Time::from_ps(k * MS), &values(0.0), &[], &[]);
         }
         ratings.restarted();
-        ratings.sample(Time::from_ps(51 * MS), &values(0.989), &[]);
+        ratings.sample(Time::from_ps(51 * MS), &values(0.989), &[], &[]);
         let [excursion] = over_now(&ratings).try_into().unwrap();
         assert_eq!(excursion.first, Time::from_ps(50 * MS));
         let rise = |ms: f64| 0.989 * -libm::expm1(-ms * MS as f64 / TAU);
         assert!((excursion.peak / rise(1.0) - 1.0).abs() < 1e-9);
-        ratings.sample(Time::from_ps(52 * MS), &values(0.989), &[]);
+        ratings.sample(Time::from_ps(52 * MS), &values(0.989), &[], &[]);
         let [excursion] = over_now(&ratings).try_into().unwrap();
         assert!((excursion.peak / rise(2.0) - 1.0).abs() < 1e-9);
     }
@@ -3086,7 +3129,10 @@ mod tests {
         )
         .unwrap();
         let columns = Columns::new(&netlist);
-        (Ratings::new(&netlist, &[], &columns, Timing::Run), columns)
+        (
+            Ratings::new(&netlist, &[], &[], &columns, Timing::Run),
+            columns,
+        )
     }
 
     /// The sheet's pulse, 0.1 ms at 1/10 duty, at its 160 mA peak, and a held 2 ms pulse at
@@ -3096,21 +3142,21 @@ mod tests {
     fn a_pulse_under_its_peak_limit_is_never_over_now() {
         let (mut ratings, columns) = with_peak();
         let values = |current| row(&columns, current);
-        ratings.sample(Time::ZERO, &values(0.0), &[]);
+        ratings.sample(Time::ZERO, &values(0.0), &[], &[]);
         let tenth = MS / 10;
         for period in 1..=30 {
             let start = period * MS;
-            ratings.sample(Time::from_ps(start), &values(0.16), &[]);
-            ratings.sample(Time::from_ps(start + tenth / 2), &values(0.16), &[]);
+            ratings.sample(Time::from_ps(start), &values(0.16), &[], &[]);
+            ratings.sample(Time::from_ps(start + tenth / 2), &values(0.16), &[], &[]);
             assert!(over_now(&ratings).is_empty(), "period {period}");
-            ratings.sample(Time::from_ps(start + tenth), &values(0.0), &[]);
+            ratings.sample(Time::from_ps(start + tenth), &values(0.0), &[], &[]);
         }
         assert_eq!(ratings.findings(), []);
         let (mut ratings, columns) = with_peak();
         let values = |current| row(&columns, current);
-        ratings.sample(Time::ZERO, &values(0.0), &[]);
+        ratings.sample(Time::ZERO, &values(0.0), &[], &[]);
         for k in 1..=20 {
-            ratings.sample(Time::from_ps(MS + k * tenth), &values(0.1), &[]);
+            ratings.sample(Time::from_ps(MS + k * tenth), &values(0.1), &[], &[]);
             assert!(over_now(&ratings).is_empty(), "at {k}");
         }
     }
@@ -3121,8 +3167,8 @@ mod tests {
     fn a_rating_with_a_peak_limit_warns_on_either() {
         let (mut ratings, columns) = with_peak();
         let values = |current| row(&columns, current);
-        ratings.sample(Time::ZERO, &values(0.0), &[]);
-        ratings.sample(Time::from_ps(MS), &values(0.2), &[]);
+        ratings.sample(Time::ZERO, &values(0.0), &[], &[]);
+        ratings.sample(Time::from_ps(MS), &values(0.2), &[], &[]);
         let found = ratings.findings();
         let [Diagnostic::RatingCurrent(peak)] = found.as_slice() else {
             panic!("not one current finding: {found:?}");
@@ -3133,10 +3179,10 @@ mod tests {
 
         let (mut ratings, columns) = with_peak();
         let values = |current| row(&columns, current);
-        ratings.sample(Time::ZERO, &values(0.0), &[]);
+        ratings.sample(Time::ZERO, &values(0.0), &[], &[]);
         let step = MS / 100;
         for k in 0..=300 {
-            ratings.sample(Time::from_ps(MS + k * step), &values(0.05), &[]);
+            ratings.sample(Time::from_ps(MS + k * step), &values(0.05), &[], &[]);
             assert!(over_now(&ratings).is_empty(), "at {k}");
         }
         let found = ratings.findings();
@@ -3156,8 +3202,8 @@ mod tests {
     #[test]
     fn a_peak_rating_warns_on_its_first_sample_over() {
         let (mut ratings, columns) = ratings(Timing::Run);
-        ratings.sample(Time::ZERO, &row(&columns, 0.0), &[]);
-        ratings.sample(Time::from_ps(MS), &row(&columns, 0.031), &[]);
+        ratings.sample(Time::ZERO, &row(&columns, 0.0), &[], &[]);
+        ratings.sample(Time::from_ps(MS), &row(&columns, 0.031), &[], &[]);
         assert!(over_now(&ratings).is_empty());
         let found = ratings.findings();
         let [Diagnostic::RatingCurrent(excursion)] = found.as_slice() else {
@@ -3195,7 +3241,10 @@ mod tests {
         )
         .unwrap();
         let columns = Columns::new(&netlist);
-        (Ratings::new(&netlist, &[], &columns, Timing::Run), columns)
+        (
+            Ratings::new(&netlist, &[], &[], &columns, Timing::Run),
+            columns,
+        )
     }
 
     fn row_at(columns: &Columns, current: f64, power: f64) -> Vec<Finite> {
@@ -3213,19 +3262,24 @@ mod tests {
     fn power_inside_a_current_peak_is_not_over_now_and_a_held_overload_still_warns() {
         let (mut ratings, columns) = diode_power();
         let values = |current, power| row_at(&columns, current, power);
-        ratings.sample(Time::ZERO, &values(0.0, 0.0), &[]);
-        ratings.sample(Time::from_ps(MS), &values(4.0, 16.1), &[]);
-        ratings.sample(Time::from_ps(MS + 50_000_000), &values(4.0, 16.1), &[]);
+        ratings.sample(Time::ZERO, &values(0.0, 0.0), &[], &[]);
+        ratings.sample(Time::from_ps(MS), &values(4.0, 16.1), &[], &[]);
+        ratings.sample(Time::from_ps(MS + 50_000_000), &values(4.0, 16.1), &[], &[]);
         assert!(over_now(&ratings).is_empty(), "{:?}", over_now(&ratings));
         assert!(ratings.findings().is_empty());
 
         let (mut ratings, columns) = diode_power();
         let values = |current, power| row_at(&columns, current, power);
-        ratings.sample(Time::ZERO, &values(0.0, 0.0), &[]);
-        ratings.sample(Time::from_ps(MS), &values(5.0, 20.0), &[]);
+        ratings.sample(Time::ZERO, &values(0.0, 0.0), &[], &[]);
+        ratings.sample(Time::from_ps(MS), &values(5.0, 20.0), &[], &[]);
         // 100 us later the recent average is over and the 10.2 ms filter has not crossed.
         // The current peak has already warned, so power is still not over now.
-        ratings.sample(Time::from_ps(MS + 100_000_000), &values(5.0, 20.0), &[]);
+        ratings.sample(
+            Time::from_ps(MS + 100_000_000),
+            &values(5.0, 20.0),
+            &[],
+            &[],
+        );
         assert!(
             over_now(&ratings).is_empty(),
             "past the peak, power is not over now: {:?}",
@@ -3241,10 +3295,10 @@ mod tests {
 
         let (mut ratings, columns) = diode_power();
         let values = |current, power| row_at(&columns, current, power);
-        ratings.sample(Time::ZERO, &values(0.0, 0.0), &[]);
+        ratings.sample(Time::ZERO, &values(0.0, 0.0), &[], &[]);
         let step = MS / 10;
         for k in 0..=200 {
-            ratings.sample(Time::from_ps(MS + k * step), &values(0.5, 0.664), &[]);
+            ratings.sample(Time::from_ps(MS + k * step), &values(0.5, 0.664), &[], &[]);
             assert!(
                 over_now(&ratings)
                     .iter()
@@ -3300,14 +3354,14 @@ mod tests {
 
         // 3.604 V rounds to 3.6 V, same as the 3.600019 V ceiling: stays quiet.
         // -0.3004 V rounds to -0.3 V, same as the -0.3 V floor: stays quiet.
-        let mut quiet = Ratings::new(&netlist, &[], &columns, Timing::Point);
-        quiet.sample(Time::ZERO, &row_vin(3.604), &[]);
-        quiet.sample(Time::ZERO, &row_vin(-0.3004), &[]);
+        let mut quiet = Ratings::new(&netlist, &[], &[], &columns, Timing::Point);
+        quiet.sample(Time::ZERO, &row_vin(3.604), &[], &[]);
+        quiet.sample(Time::ZERO, &row_vin(-0.3004), &[], &[]);
         assert!(quiet.findings().is_empty(), "{:?}", quiet.findings());
 
         // 3.606 V rounds to 3.61 V > 3.6 V: warns, with unrounded data and rounded message.
-        let mut over = Ratings::new(&netlist, &[], &columns, Timing::Point);
-        over.sample(Time::ZERO, &row_vin(3.606), &[]);
+        let mut over = Ratings::new(&netlist, &[], &[], &columns, Timing::Point);
+        over.sample(Time::ZERO, &row_vin(3.606), &[], &[]);
         let found = over.findings();
         assert_eq!(found.len(), 1, "{found:?}");
         let json = serde_json::to_value(&found[0]).unwrap();
@@ -3319,8 +3373,8 @@ mod tests {
         assert_eq!(json["data"]["high"], 3.600019);
 
         // -0.301 V rounds to -0.301 V < -0.3 V: warns below floor.
-        let mut under = Ratings::new(&netlist, &[], &columns, Timing::Point);
-        under.sample(Time::ZERO, &row_vin(-0.301), &[]);
+        let mut under = Ratings::new(&netlist, &[], &[], &columns, Timing::Point);
+        under.sample(Time::ZERO, &row_vin(-0.301), &[], &[]);
         let found = under.findings();
         assert_eq!(found.len(), 1, "{found:?}");
         assert_eq!(
@@ -3416,7 +3470,10 @@ mod tests {
         )
         .unwrap();
         let columns = Columns::new(&netlist);
-        (Ratings::new(&netlist, &[], &columns, Timing::Run), columns)
+        (
+            Ratings::new(&netlist, &[], &[], &columns, Timing::Run),
+            columns,
+        )
     }
 
     /// A row with each named column set and every other column 0, which is quiet in every
@@ -3436,8 +3493,8 @@ mod tests {
         for (k, row) in rows.iter().enumerate() {
             let at = Time::from_ps((k as u64 + 1) * 1_000_000);
             let mut copy = ratings.clone();
-            copy.sample(at, row, &[]);
-            let probe = Some((at, row.as_slice(), &[][..]));
+            copy.sample(at, row, &[], &[]);
+            let probe = Some((at, row.as_slice(), &[][..], &[][..]));
             let now = ratings.now(probe);
             assert_eq!(now, copy.found(), "warnings at row {k}");
             assert_eq!(
@@ -3445,7 +3502,7 @@ mod tests {
                 copy.marks(),
                 "marks at row {k}"
             );
-            ratings.sample(at, row, &[]);
+            ratings.sample(at, row, &[], &[]);
             found.push(now);
         }
         found
@@ -3586,29 +3643,41 @@ mod tests {
         let row = |set: &[(&str, f64)]| row_of(&columns, set);
 
         // Operating point warns at once on either polarity, and stays quiet at or below Vf.
-        let mut op = Ratings::new(&netlist, &[], &columns, Timing::Point);
-        op.sample(Time::ZERO, &row(&[("#net.ns", 0.8), ("#net.pd", 0.7)]), &[]);
+        let mut op = Ratings::new(&netlist, &[], &[], &columns, Timing::Point);
+        op.sample(
+            Time::ZERO,
+            &row(&[("#net.ns", 0.8), ("#net.pd", 0.7)]),
+            &[],
+            &[],
+        );
         assert_eq!(op.findings(), []);
-        op.sample(Time::ZERO, &row(&[("#net.ns", 2.5), ("#net.pd", 1.9)]), &[]);
+        op.sample(
+            Time::ZERO,
+            &row(&[("#net.ns", 2.5), ("#net.pd", 1.9)]),
+            &[],
+            &[],
+        );
         let found = op.findings();
         assert_eq!(found.len(), 2, "{found:?}");
 
         // Transient: brief spike under BODY_DIODE_HOLD_PS stays quiet, then held reverse bias
         // warns with first at the start of the held spell.
-        let mut run = Ratings::new(&netlist, &[], &columns, Timing::Run);
-        run.sample(Time::from_ps(1_000), &row(&[]), &[]);
+        let mut run = Ratings::new(&netlist, &[], &[], &columns, Timing::Run);
+        run.sample(Time::from_ps(1_000), &row(&[]), &[], &[]);
         // Sub-1us spike on both devices (500 ns).
         run.sample(
             Time::from_ps(1_000_000),
             &row(&[("#net.ns", 3.3), ("#net.pd", 3.3)]),
+            &[],
             &[],
         );
         run.sample(
             Time::from_ps(1_500_000),
             &row(&[("#net.ns", 3.3), ("#net.pd", 3.3)]),
             &[],
+            &[],
         );
-        run.sample(Time::from_ps(1_600_000), &row(&[]), &[]);
+        run.sample(Time::from_ps(1_600_000), &row(&[]), &[], &[]);
         assert_eq!(run.findings(), [], "brief spike must stay quiet");
 
         // Below-knee reverse voltage held for 10 ms stays quiet.
@@ -3616,10 +3685,12 @@ mod tests {
             Time::from_ps(2_000_000),
             &row(&[("#net.ns", 0.5), ("#net.pd", 0.4)]),
             &[],
+            &[],
         );
         run.sample(
             Time::from_ps(12_000_000_000),
             &row(&[("#net.ns", 0.5), ("#net.pd", 0.4)]),
+            &[],
             &[],
         );
         assert_eq!(
@@ -3629,17 +3700,19 @@ mod tests {
         );
 
         // Edge restart at 20 ms followed by sustained reverse bias on mn (2.5 V) and mp (1.8 V).
-        run.sample(Time::from_ps(20_000_000_000), &row(&[]), &[]);
+        run.sample(Time::from_ps(20_000_000_000), &row(&[]), &[], &[]);
         run.restarted();
         run.sample(
             Time::from_ps(20_000_001_000),
             &row(&[("#net.ns", 2.5), ("#net.pd", 1.8)]),
+            &[],
             &[],
         );
         assert_eq!(run.findings(), [], "1 ns after edge is still under 1 us");
         run.sample(
             Time::from_ps(20_001_000_000),
             &row(&[("#net.ns", 2.5), ("#net.pd", 1.8)]),
+            &[],
             &[],
         );
         let found = run.findings();

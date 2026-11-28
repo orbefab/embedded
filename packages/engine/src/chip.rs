@@ -33,19 +33,22 @@ pub use op_amp::OpAmp;
 pub use regulator::LinearRegulator;
 pub use relay::Relay;
 
+use crate::active::Powered;
 use crate::logic::Level;
 
 use crate::mna::{Layout, Stamp, Unknowns};
 use crate::watch::Watch;
 
-/// A passive chip's discrete state. A value, replaced at an accepted time and never mutated.
-/// The loop restarts whenever a state changes, so it holds only what the stamp reads. A chip
-/// with memory that leaves its drive alone is an active chip, `active::Chip`, whose restart
-/// compares only its drive image.
+/// A passive chip's discrete state, or an active chip's supply gate. A value, replaced at an
+/// accepted time and never mutated. The loop restarts whenever a state changes, so it holds only
+/// what the stamp reads. A chip with memory that leaves its drive alone is an active chip,
+/// `active::Chip`, whose restart compares only its drive image.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum State {
     Ne555(ne555::State),
     Relay(relay::State),
+    /// Whether an active chip's supply powers its outputs, which its stamp reads.
+    Supply(Powered),
 }
 
 impl State {
@@ -54,6 +57,7 @@ impl State {
         match self {
             State::Ne555(state) => u64::from(state.latch == Level::High),
             State::Relay(state) => 2 + u64::from(state.contact == crate::netlist::Contact::Closed),
+            State::Supply(powered) => 4 + u64::from(powered == Powered::On),
         }
     }
 }
@@ -192,7 +196,9 @@ pub(crate) fn stamp(chip: Passive<'_>, state: State, stamp: &mut Stamp<'_>) {
     match (chip, state) {
         (Passive::Ne555(ne555), State::Ne555(state)) => ne555::stamp(ne555, state, stamp),
         (Passive::Relay(relay), State::Relay(state)) => relay::stamp(relay, state, stamp),
-        (Passive::Ne555(_), State::Relay(_)) | (Passive::Relay(_), State::Ne555(_)) => {
+        (Passive::Ne555(_), State::Relay(_))
+        | (Passive::Relay(_), State::Ne555(_))
+        | (Passive::Ne555(_) | Passive::Relay(_), State::Supply(_)) => {
             unreachable!("a chip's state is its own kind's")
         }
     }
@@ -204,7 +210,9 @@ pub(crate) fn react(chip: Passive<'_>, state: &State, _before: &[bool], after: &
     match (chip, state) {
         (Passive::Ne555(_), State::Ne555(state)) => State::Ne555(ne555::react(*state, after)),
         (Passive::Relay(_), State::Relay(_)) => State::Relay(relay::react(after)),
-        (Passive::Ne555(_), State::Relay(_)) | (Passive::Relay(_), State::Ne555(_)) => {
+        (Passive::Ne555(_), State::Relay(_))
+        | (Passive::Relay(_), State::Ne555(_))
+        | (Passive::Ne555(_) | Passive::Relay(_), State::Supply(_)) => {
             unreachable!("a chip's state is its own kind's")
         }
     }
@@ -223,7 +231,9 @@ pub(crate) fn levels(chip: Passive<'_>, state: &State, watched: &[bool]) -> Vec<
     match (chip, state) {
         (Passive::Ne555(_), State::Ne555(state)) => ne555::levels(*state, watched).to_vec(),
         (Passive::Relay(_), State::Relay(state)) => relay::levels(*state).to_vec(),
-        (Passive::Ne555(_), State::Relay(_)) | (Passive::Relay(_), State::Ne555(_)) => {
+        (Passive::Ne555(_), State::Relay(_))
+        | (Passive::Relay(_), State::Ne555(_))
+        | (Passive::Ne555(_) | Passive::Relay(_), State::Supply(_)) => {
             unreachable!("a chip's state is its own kind's")
         }
     }

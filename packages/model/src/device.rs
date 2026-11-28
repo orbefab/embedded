@@ -32,14 +32,24 @@ pub trait Device: State {
     /// The world quantities it reads with [`Cx::world`]. A scene with a part of this device
     /// declares each one. None, unless it says otherwise.
     const WORLD: &'static [Quantity] = &[];
-    /// Volt. Below this supply the host stamps every output off. [`Device::drive`] still
-    /// reports the logical level. `None` drives at any supply.
+    /// Volt. The host stamps every output and [`Device::draw`] once the supply rises to this,
+    /// and stamps every output off and [`Device::released_draw`] once it falls below
+    /// [`RELEASE_SUPPLY_V`](Self::RELEASE_SUPPLY_V), until it rises to this again.
+    /// [`Device::drive`] and [`Device::draw`] still report the powered levels. `None` drives
+    /// at any supply.
     const MIN_SUPPLY_V: Option<f64> = None;
-    /// Volt. Below this supply the host stamps every output off. Defaults to
-    /// [`MIN_SUPPLY_V`](Self::MIN_SUPPLY_V), so a device whose floor comes from its part params
-    /// can override it.
+    /// Volt, at most [`MIN_SUPPLY_V`](Self::MIN_SUPPLY_V). `None` releases at
+    /// [`MIN_SUPPLY_V`](Self::MIN_SUPPLY_V) itself, with no band between the two.
+    const RELEASE_SUPPLY_V: Option<f64> = None;
+    /// [`MIN_SUPPLY_V`](Self::MIN_SUPPLY_V) by default, so a device whose floor comes from its
+    /// part params can override it.
     fn min_supply_v(&self) -> Option<f64> {
         Self::MIN_SUPPLY_V
+    }
+    /// [`RELEASE_SUPPLY_V`](Self::RELEASE_SUPPLY_V), or [`Device::min_supply_v`] without it.
+    /// The host reads both once, at power-on.
+    fn release_supply_v(&self) -> Option<f64> {
+        Self::RELEASE_SUPPLY_V.or_else(|| self.min_supply_v())
     }
     /// The host reads this device's samples at every accepted step, so a supply it follows
     /// is the voltage of that step and not a clock of its own.
@@ -53,6 +63,11 @@ pub trait Device: State {
     fn drive(&self) -> Drives;
     /// What it draws from its supply now. [`Draw::NONE`] unless it says otherwise.
     fn draw(&self) -> Draw {
+        Draw::NONE
+    }
+    /// What it draws from its supply while its supply gate is off, when
+    /// [`min_supply_v`](Self::min_supply_v) is `Some`. [`Draw::NONE`] by default.
+    fn released_draw(&self) -> Draw {
         Draw::NONE
     }
     /// Its watches' levels from `at` on.

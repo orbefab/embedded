@@ -245,19 +245,20 @@ fn open_iset_and_unpowered_blank_the_display() {
     assert_eq!(frame_of(&chip), [0; 64]);
     assert!((chip.draw().amps - 0.008).abs() < 1e-6);
 
-    // Dip to 3.3 V / 2.5 V / 2.0 V (above 2.0 V SRAM retention floor) keeps registers intact.
-    for vcc in [3.999, 3.3, 2.5, 2.0] {
+    // Dip to 3.3 V / 2.5 V / 2.0 V / 1.8 V (down to the release floor) keeps registers intact.
+    for vcc in [3.999, 3.3, 2.5, 2.0, 1.8] {
         chip.sample(&mut cx, at(t + US), &[vcc, v_iset_for(vcc, 10_000.0)]);
         assert_eq!(chip.digits()[0], 0xFF, "vcc={vcc}");
         assert!(frame_of(&chip)[0] > 0, "vcc={vcc}");
     }
 
-    // Below 2.0 V retention floor: resets, blanks, draws nothing.
-    chip.sample(&mut cx, at(t + 2 * US), &[1.9, 0.0]);
+    // Below 1.8 V release floor: resets, blanks, and the host stamps released_draw (0 A).
+    chip.sample(&mut cx, at(t + 2 * US), &[1.7, 0.0]);
     chip.input(&mut cx, at(t + 2 * US), levels(false, false, false, false));
     assert_eq!(chip.digits()[0], 0x00);
     assert_eq!(frame_of(&chip), [0; 64]);
-    assert_eq!(chip.draw().amps, 0.0);
+    assert_eq!(chip.released_draw().amps, 0.0);
+    assert!((chip.draw().amps - 150e-6).abs() < 1e-9);
 }
 
 #[test]

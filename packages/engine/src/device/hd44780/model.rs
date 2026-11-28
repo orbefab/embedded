@@ -28,7 +28,8 @@ use orbe_model::{
 
 use controller::{Controller, HEIGHT, WIDTH};
 
-/// Watch order: `RS`, `R/W`, `E`, `DB0..DB7`, then the 2.7 V and 4.5 V supply comparators,
+/// Watch order: `RS`, `R/W`, `E`, `DB0..DB7`, then the supply watch, high from 2.7 V rising to
+/// 2.4 V falling, the 4.5 V supply comparator,
 /// `VDD - V0` at the LCD voltage floor, the backlight's `A - K` at its lit voltage, and `VDD` at
 /// the module's minimum operating voltage.
 pub const WATCH_RS: usize = 0;
@@ -50,6 +51,9 @@ const OUT_RW: usize = 9;
 
 /// Hitachi ADE-207-272 Table 6, operating voltage minimum, 2.7 V.
 pub const MIN_VDD_V: f64 = 2.7;
+/// The controller stops once `VDD` falls below this, until it rises to [`MIN_VDD_V`] again. The
+/// sheet gives no falling threshold for the controller, so the 0.3 V band is a guess.
+pub const RELEASE_VDD_V: f64 = 2.4;
 
 /// Rule names reported via `Cx::broke`.
 const ENABLE_CYCLE: &str = "enable_cycle";
@@ -155,6 +159,7 @@ impl Device for Hd44780 {
     };
 
     const MIN_SUPPLY_V: Option<f64> = Some(MIN_VDD_V);
+    const RELEASE_SUPPLY_V: Option<f64> = Some(RELEASE_VDD_V);
 
     fn new(params: &Params<'_>) -> Result<Hd44780, Error> {
         let logic_amps = match params.int("logic_na").unwrap_or(0) {
@@ -262,11 +267,7 @@ impl Device for Hd44780 {
 
     fn draw(&self) -> Draw {
         Draw {
-            amps: if self.controller.powered() {
-                self.logic_amps
-            } else {
-                0.0
-            },
+            amps: self.logic_amps,
             holds_above_v: self.holds_above_v,
         }
     }

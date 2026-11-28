@@ -39,7 +39,7 @@ use crate::serial::SerialByte;
 
 use crate::air::{self, Air, Net};
 use crate::chip::Active;
-use crate::mna::{Solution, System};
+use crate::mna::{Node, Solution, System};
 use crate::newton::Circuit;
 use crate::watch::{Levels, Signal, Watch};
 use crate::world::World;
@@ -127,14 +127,6 @@ pub(crate) struct Chip {
     pub(crate) takes: Takes,
     /// The core at power-on.
     pub(crate) core: Core,
-}
-
-impl Chip {
-    /// Whether [`stamp`] reads the iterate: a device [`Draw`] does, and so does
-    /// [`supply_released`] on a chip with outputs and a minimum supply.
-    pub(crate) fn reads_iterate(&self) -> bool {
-        self.draw.is_some() || (!self.outputs.is_empty() && self.core.min_supply_v().is_some())
-    }
 }
 
 /// The nets of a chip's SPI target pins. It takes each `Spi` record whose CS and SCLK are on
@@ -279,6 +271,16 @@ impl Core {
         }
     }
 
+    /// [`orbe_model::Device::release_supply_v`], or `None` for a core that drives at any supply.
+    pub(crate) fn release_supply_v(&self) -> Option<f64> {
+        match *self {
+            Core::Device(ref core) => core.release_supply_v(),
+            Core::Mcu(_) | Core::Net(_) => None,
+            #[cfg(test)]
+            Core::Script(_) => None,
+        }
+    }
+
     /// Whether the host samples it at every accepted step.
     pub(crate) fn tracks_supply(&self) -> bool {
         match self {
@@ -303,6 +305,16 @@ impl Core {
     pub(crate) fn draw(&self) -> Draw {
         match *self {
             Core::Device(ref core) => core.draw(),
+            Core::Mcu(_) | Core::Net(_) => Draw::NONE,
+            #[cfg(test)]
+            Core::Script(_) => Draw::NONE,
+        }
+    }
+
+    /// What its device draws from its supply while its supply gate is off.
+    pub(crate) fn released_draw(&self) -> Draw {
+        match *self {
+            Core::Device(ref core) => core.released_draw(),
             Core::Mcu(_) | Core::Net(_) => Draw::NONE,
             #[cfg(test)]
             Core::Script(_) => Draw::NONE,
@@ -618,39 +630,63 @@ pub(crate) fn chip(part: PartId, kind: Active<'_>, radio: bool) -> Chip {
     }
 }
 
-/// Margin inside a device's minimum supply so an exact `min_supply_v` rail does not release
-/// outputs on 1-ULP solver rounding.
+/// Margin inside a device's supply thresholds so a rail exactly at one reads as at it, and
+/// 1-ULP solver rounding does not move it across.
 const SUPPLY_BOUND_INSIDE_V: f64 = 1e-6;
 
-/// Whether `vcc` over `gnd` is below the supply at which `core` still drives.
-pub(crate) fn supply_released(core: &Core, vcc: f64, gnd: f64) -> bool {
-    core.min_supply_v().is_some_and(|min| {
-        let margin = SUPPLY_BOUND_INSIDE_V.min(0.25 * min);
-        vcc - gnd < min - margin
-    })
+/// Whether a chip's supply powers its outputs. It is a discrete per-chip state updated only from
+/// accepted solutions, like a passive chip's state; Newton stamps it as held.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Powered {
+    Off,
+    On,
 }
 
-/// Whether any output's [`supply_released`] state differs between `before` (the iterate used to
-/// stamp) and `after` (the solve's solution).
-pub(crate) fn supply_flipped(
-    chip: &Chip,
-    core: &Core,
-    before: &Solution,
-    after: &Solution,
-) -> bool {
-    if core.min_supply_v().is_none() {
-        return false;
-    }
-    chip.outputs.iter().any(|output| {
-        supply_released(core, before.voltage(output.vcc), before.voltage(output.gnd))
-            != supply_released(core, after.voltage(output.vcc), after.voltage(output.gnd))
+/// The watch whose level is [`Powered`] for a chip with outputs or a draw and a minimum supply,
+/// from its rails' `V(VCC) - V(GND)`: high once that rises to the minimum, low once it falls
+/// below the release supply. `None` for a chip that drives at any supply.
+pub(crate) fn supply_watch(chip: &Chip) -> Option<Watch> {
+    let min = chip.core.min_supply_v()?;
+    let (vcc, gnd) = chip
+        .outputs
+        .first()
+        .map(|output| (output.vcc, output.gnd))
+        .or(chip.draw)?;
+    debug_assert!(
+        chip.outputs
+            .iter()
+            .all(|other| (other.vcc, other.gnd) == (vcc, gnd)),
+        "a chip's outputs share its rails"
+    );
+    debug_assert!(
+        chip.draw.is_none_or(|draw| draw == (vcc, gnd)),
+        "a chip's draw shares its rails"
+    );
+    let release = chip.core.release_supply_v().unwrap_or(min);
+    debug_assert!(release <= min, "a chip releases at or below its minimum");
+    let margin = SUPPLY_BOUND_INSIDE_V.min(0.25 * release);
+    let supply = |volts: f64| Signal {
+        terms: vec![(Node::from(vcc), 1.0), (Node::from(gnd), -1.0)],
+        offset: volts - margin,
+    };
+    Some(Watch {
+        rise: supply(min),
+        fall: supply(release),
     })
 }
 
 /// The drops are sources, so they scale. A device's draw is linearised at `x`, the iterate:
-/// its current there, and its slope as a conductance. A device below its minimum supply
-/// stamps no stage: its [`Core::drive`] image stays, and the pins are released.
-pub(crate) fn stamp(chip: &Chip, core: &Core, sys: &mut System, x: &Solution, source_scale: f64) {
+/// its current there, and its slope as a conductance. A `released` chip, whose supply gate is
+/// [`Powered::Off`], stamps [`Core::released_draw`] and no output stage: its [`Core::drive`]
+/// image stays, and the pins are released.
+pub(crate) fn stamp(
+    chip: &Chip,
+    core: &Core,
+    released: bool,
+    sys: &mut System,
+    x: &Solution,
+    source_scale: f64,
+) {
     let drive = core.drive();
     debug_assert_eq!(drive.len(), chip.outputs.len());
     if let Some(supply) = chip.supply {
@@ -658,7 +694,12 @@ pub(crate) fn stamp(chip: &Chip, core: &Core, sys: &mut System, x: &Solution, so
     }
     if let Some((vcc, gnd)) = chip.draw {
         let volts = x.voltage(vcc) - x.voltage(gnd);
-        let (amps, slope) = core.draw().at(volts);
+        let draw = if released {
+            core.released_draw()
+        } else {
+            core.draw()
+        };
+        let (amps, slope) = draw.at(volts);
         sys.conductance(vcc, gnd, slope);
         sys.current(vcc, gnd, amps - slope * volts);
     }
@@ -669,7 +710,7 @@ pub(crate) fn stamp(chip: &Chip, core: &Core, sys: &mut System, x: &Solution, so
             sys.conductance(output.pin, output.vcc, 1.0 / ohm);
             sys.conductance(output.pin, output.gnd, 1.0 / ohm);
         }
-        if supply_released(core, x.voltage(output.vcc), x.voltage(output.gnd)) {
+        if released {
             continue;
         }
         if let Some(ohm) = output.pull_down

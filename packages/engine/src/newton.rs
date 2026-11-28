@@ -6,11 +6,11 @@ use crate::diagnostic::Diagnostic;
 use crate::logic::Level;
 use crate::name::{Name, Ref};
 
-use crate::active;
+use crate::active::{self, Powered};
 use crate::chip;
 use crate::element;
 use crate::mna::{GMIN, Layout, Probe, Solution, Solver, Stamp, System};
-use crate::watch::{Levels, Watches};
+use crate::watch::{Levels, Watch, Watches};
 
 pub(crate) const RELTOL: f64 = 1e-6;
 pub(crate) const VNTOL: f64 = 1e-9;
@@ -25,10 +25,17 @@ pub(crate) struct Circuit {
     pub(crate) watches: Watches,
     /// By active slot.
     pub(crate) actives: Vec<active::Chip>,
+    /// The active slot of each chip whose outputs its supply powers, in active slot order. Gate
+    /// `g`'s state follows the passive chips' in a solve's chip states, at `passives + g`.
+    gates: Vec<usize>,
+    /// By active slot, the index of its gate's state in a solve's chip states.
+    gate_states: Vec<Option<usize>>,
     /// Every chip a netlist part builds, sorted by part, which is the order of the logic refs.
     logic: Vec<(PartId, Slot)>,
-    /// Neither a part's stamp nor an active chip's stamp reads the iterate, so one Newton call
-    /// stamps one system.
+    /// No part's stamp reads the iterate, and no active chip draws through a [`Draw`], so one
+    /// Newton call stamps one system.
+    ///
+    /// [`Draw`]: orbe_model::Draw
     pub(crate) linear: bool,
 }
 
@@ -87,12 +94,24 @@ impl Circuit {
             .collect();
         logic.sort_unstable_by_key(|&(id, _)| id);
         let linear = netlist.parts().all(|(_, part)| !part.model.reads_iterate())
-            && actives.iter().all(|chip| !chip.reads_iterate());
+            && actives.iter().all(|chip| chip.draw.is_none());
+        let passives = layout.chips().len();
+        let gated: Vec<(usize, Watch)> = actives
+            .iter()
+            .enumerate()
+            .filter_map(|(k, chip)| Some((k, active::supply_watch(chip)?)))
+            .collect();
+        let mut gate_states = vec![None; actives.len()];
+        for (g, &(k, _)) in gated.iter().enumerate() {
+            gate_states[k] = Some(passives + g);
+        }
         let mut circuit = Circuit {
             netlist,
             layout,
             watches: Watches::new(Vec::new()),
             actives,
+            gates: gated.iter().map(|&(k, _)| k).collect(),
+            gate_states,
             logic,
             linear,
         };
@@ -100,6 +119,7 @@ impl Circuit {
             .chips()
             .map(|(id, chip)| chip::watches(chip, id, &circuit.layout))
             .chain(circuit.actives.iter().map(|chip| chip.watches.clone()))
+            .chain(gated.into_iter().map(|(_, watch)| vec![watch]))
             .collect();
         circuit.watches = Watches::new(watches);
         Ok(circuit)
@@ -170,9 +190,32 @@ impl Circuit {
         chip::passive(&self.netlist.part(id).model).expect("a passive slot is a passive chip")
     }
 
-    /// Every chip's state at power-on, in slot order.
+    /// Every chip's state at power-on, in slot order, then each gate's, which is off.
     pub(crate) fn power_on(&self) -> Vec<chip::State> {
-        self.chips().map(|(_, chip)| chip::power_on(chip)).collect()
+        self.chips()
+            .map(|(_, chip)| chip::power_on(chip))
+            .chain(self.gates.iter().map(|_| chip::State::Supply(Powered::Off)))
+            .collect()
+    }
+
+    /// The part of each state in a solve's chip states: the passive chips', then the gated
+    /// chips'.
+    pub(crate) fn state_parts(&self) -> impl Iterator<Item = PartId> + '_ {
+        self.layout.chips().iter().copied().chain(
+            self.gates
+                .iter()
+                .map(|&k| self.actives[k].part.expect("a gated chip is a part")),
+        )
+    }
+
+    /// Whether active chip `k`'s outputs are off under `chips`, because its gate is.
+    pub(crate) fn released(&self, chips: &[chip::State], k: usize) -> bool {
+        self.gate_states[k].is_some_and(|slot| chips[slot] == chip::State::Supply(Powered::Off))
+    }
+
+    /// By active slot, the index of its gate's state in a solve's chip states.
+    pub(crate) fn gate_states(&self) -> &[Option<usize>] {
+        &self.gate_states
     }
 
     /// Every chip's next state, from the levels just before and just after one time.
@@ -182,6 +225,8 @@ impl Circuit {
         before: &Levels,
         after: &Levels,
     ) -> Vec<chip::State> {
+        let passives = self.layout.chips().len();
+        let gates = passives + self.actives.len();
         self.chips()
             .zip(chips)
             .enumerate()
@@ -189,6 +234,13 @@ impl Circuit {
                 let watched = self.watches.of(slot);
                 chip::react(chip, state, before.of(watched.clone()), after.of(watched))
             })
+            .chain((0..self.gates.len()).map(|g| {
+                let watched = self.watches.of(gates + g);
+                chip::State::Supply(match after.of(watched)[0] {
+                    true => Powered::On,
+                    false => Powered::Off,
+                })
+            }))
             .collect()
     }
 }
@@ -367,8 +419,6 @@ pub(crate) struct Stall {
 pub(crate) enum Offender {
     /// Limited, or its current check failed.
     Junction(PartId),
-    /// An active chip's supply crossed its minimum-supply release threshold.
-    Supply(PartId),
     /// Moved more than its tolerance.
     Row(usize),
 }
@@ -376,9 +426,7 @@ pub(crate) enum Offender {
 impl Offender {
     pub(crate) fn describe(self, circuit: &Circuit) -> Ref {
         match self {
-            Offender::Junction(part) | Offender::Supply(part) => {
-                Ref::Part(circuit.netlist.part(part).name.clone())
-            }
+            Offender::Junction(part) => Ref::Part(circuit.netlist.part(part).name.clone()),
             Offender::Row(row) => circuit.layout.describe(&circuit.netlist, row),
         }
     }
@@ -387,10 +435,9 @@ impl Offender {
 /// Newton with junction limiting, at most `budget` solves, each on `solver`. On a linear
 /// circuit the solver's memo answers a system it kept.
 ///
-/// Converged means four checks pass in one iteration: no unknown moved more
-/// than its tolerance, every junction's current check passed, no junction
-/// was limited, and no active chip's supply-release state changed between
-/// stamping and solving. A capacitor's current is not one of those unknowns, as `worst_row` says.
+/// Converged means three checks pass in one iteration: no unknown moved more
+/// than its tolerance, every junction's current check passed, and no junction
+/// was limited. A capacitor's current is not one of those unknowns, as `worst_row` says.
 ///
 /// On a linear circuit the second iteration would stamp the first one's system, solve it to the
 /// same bits and pass every check, so the call returns after one solve with that iteration's
@@ -447,23 +494,6 @@ pub(crate) fn newton(
             }
         }
         let (worst_row, row_ratio) = worst_row(layout, iterate.solution.components(), &solution);
-        let supply_flipped = (!circuit.linear)
-            .then(|| {
-                circuit
-                    .actives
-                    .iter()
-                    .enumerate()
-                    .find(|&(k, chip)| {
-                        active::supply_flipped(
-                            chip,
-                            &conditions.cores[k],
-                            &iterate.solution,
-                            &solution,
-                        )
-                    })
-                    .map(|(_, chip)| chip.part.map_or(Offender::Row(worst_row), Offender::Supply))
-            })
-            .flatten();
         let before = std::mem::replace(
             &mut iterate,
             Iterate {
@@ -472,10 +502,9 @@ pub(crate) fn newton(
             },
         );
         spare = before.junctions;
-        offender = Some(match (worst_junction, supply_flipped) {
-            (Some((_, part)), _) => Offender::Junction(part),
-            (None, Some(offender)) => offender,
-            (None, None) if row_ratio <= 1.0 => {
+        offender = Some(match worst_junction {
+            Some((_, part)) => Offender::Junction(part),
+            None if row_ratio <= 1.0 => {
                 let moved = match circuit.linear {
                     true => vec![0.0; layout.size()],
                     false => (before.solution.components().iter())
@@ -489,14 +518,14 @@ pub(crate) fn newton(
                     moved,
                 });
             }
-            (None, None) if circuit.linear && iteration < budget => {
+            None if circuit.linear && iteration < budget => {
                 return Ok(Converged {
                     iterate,
                     iterations: iteration + 1,
                     moved: vec![0.0; layout.size()],
                 });
             }
-            (None, None) => Offender::Row(worst_row),
+            None => Offender::Row(worst_row),
         });
     }
     Err(Failure::Stalled(Stall {
@@ -512,6 +541,7 @@ fn stamp(circuit: &Circuit, system: &mut System, conditions: &Conditions, iterat
         active::stamp(
             chip,
             &conditions.cores[k],
+            circuit.released(conditions.chips, k),
             system,
             &iterate.solution,
             conditions.source_scale,
