@@ -36,6 +36,8 @@ use crate::watch::{self, Levels};
 mod input;
 pub(crate) mod predict;
 
+#[cfg(test)]
+pub(crate) use input::NetworkSendRejected;
 pub use input::{
     Applied, DeviceEvent, Input, Rejected, Serial, Setting, WorldApplied, WorldChange,
 };
@@ -1085,6 +1087,11 @@ impl Session {
                 Time::from_ps(accepted.at.as_ps() + clipped),
             );
             reach = reach.max(at);
+            assert!(
+                at > accepted.at,
+                "horizon {at:?} moved back to or before accepted step {:?}",
+                accepted.at
+            );
             let h = at.as_ps() - accepted.at.as_ps();
             let limit = if h < clipped {
                 Limit::Chip

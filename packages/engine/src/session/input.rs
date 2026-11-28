@@ -117,6 +117,20 @@ pub enum Rejected {
     Undeclared,
 }
 
+/// Why [`Session::send_to_station`] refused to inject a network MSDU.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NetworkSendRejected {
+    /// The session has already stopped or faulted.
+    Ended,
+    /// The netlist has no `network`.
+    NoNetwork,
+    /// The event's time is before the session's current time or last accepted step.
+    EventInPast,
+    /// The event's time is at or past `stop`.
+    PastStop,
+}
+
 impl Session {
     /// Appends `input` to its part's events at the first time from the one it asks for that is
     /// after `now`'s accepted step, at or after `now` and the accepted step's reach, and legal
@@ -253,6 +267,36 @@ impl Session {
         self.state = self.solved(accepted);
         let status = self.advance_to(now);
         Applied { at, status }
+    }
+
+    /// Queues `msdu` from the network's router to `sta` at `at` and resettles the held step so
+    /// any air frame ending before the previously solved landing is taken in order. Refuses an
+    /// event before `now` or the last accepted step as [`NetworkSendRejected::EventInPast`].
+    #[cfg(test)]
+    pub(crate) fn send_to_station(
+        &mut self,
+        at: Time,
+        sta: orbe_net::Mac,
+        msdu: &[u8],
+    ) -> Result<Applied, NetworkSendRejected> {
+        let State::Running { accepted, now, .. } = &self.state else {
+            return Err(NetworkSendRejected::Ended);
+        };
+        let (accepted_at, now) = (accepted.at, *now);
+        if at < now || at < accepted_at {
+            return Err(NetworkSendRejected::EventInPast);
+        }
+        if at >= self.transient.stop {
+            return Err(NetworkSendRejected::PastStop);
+        }
+        self.actives.queue_network_msdu(
+            self.circuit.netlist.world(),
+            accepted_at,
+            at,
+            sta,
+            msdu,
+        )?;
+        Ok(self.resettle(at))
     }
 }
 

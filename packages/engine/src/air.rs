@@ -60,6 +60,16 @@ impl Net {
         self.take_rows();
     }
 
+    #[cfg(test)]
+    pub(crate) fn send_msdu(
+        &mut self,
+        at: Time,
+        sta: orbe_net::Mac,
+        msdu: &[u8],
+    ) -> Result<(), orbe_net::PastEvent> {
+        self.network.send_msdu(at, sta, msdu)
+    }
+
     /// Hands over and drops each row it made at or before `through`, in order.
     pub(crate) fn drain_rows(&mut self, through: Time, made: impl FnMut(Row)) {
         let ended = self.rows.partition_point(|row| row.at <= through);

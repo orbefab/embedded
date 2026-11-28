@@ -401,7 +401,7 @@ fn effect(addr: u32) -> Option<Effect> {
 }
 
 /// The watchdog deadline, the next LEDC event and the I2C controllers', whether each I2C runs,
-/// any active AES DMA deadline, and where an armed TBTT would raise the power interrupt.
+/// and any active AES DMA deadline.
 #[derive(Debug, PartialEq, Eq)]
 struct Armed {
     deadline: Option<Expiry>,
@@ -409,7 +409,6 @@ struct Armed {
     i2c_runs: [bool; 2],
     i2c: [Option<Tick>; 2],
     aes: Option<Tick>,
-    tbtt: Option<Tick>,
 }
 
 impl Soc {
@@ -599,7 +598,10 @@ impl Soc {
     }
 
     pub(crate) fn use_radio(&mut self) {
-        self.radio = Some(Box::new(Radio::new()));
+        let mut radio = Box::new(Radio::new());
+        let ana_conf = self.plain.get(&(RTC_CNTL + wifi::ANA_CONF)).copied();
+        radio.power(Tick(0), ana_conf.unwrap_or(0));
+        self.radio = Some(radio);
     }
 
     /// The Wi-Fi radio, on a chip built with it.
@@ -757,7 +759,15 @@ impl Soc {
     }
 
     /// Keeps `stall` equal to the plain word at `addr` the caller just wrote with `value`.
-    fn wrote_plain(&mut self, addr: u32, value: u32) {
+    fn wrote_plain(&mut self, now: Tick, addr: u32, value: u32) {
+        if addr == RTC_CNTL + wifi::ANA_CONF
+            && let Some(setting) = self
+                .radio
+                .as_mut()
+                .and_then(|radio| radio.power(now, value))
+        {
+            self.ending = Some(Ending::Refused(Refused::Register("RADIO", setting)));
+        }
         if addr == RTC_CNTL + OPTIONS0 {
             self.stall.0 = value;
         } else if addr == RTC_CNTL + app::SW_CPU_STALL {
@@ -953,7 +963,7 @@ impl Soc {
             }
             _ => {
                 self.plain.insert(addr, value);
-                self.wrote_plain(addr, value);
+                self.wrote_plain(now, addr, value);
             }
         }
     }
@@ -1568,7 +1578,7 @@ impl Soc {
             .map(|word| *word = value)
             .is_some();
         if kept {
-            self.wrote_plain(addr, value);
+            self.wrote_plain(now, addr, value);
         }
         kept
     }
@@ -1618,8 +1628,13 @@ impl Soc {
                 sources |= 1 << uart::SOURCES[index];
             }
         }
-        if self.radio.as_mut().is_some_and(|radio| radio.line(now)) {
-            sources |= 1 << wifi::SOURCE;
+        if let Some(radio) = self.radio.as_mut() {
+            if radio.line(now) {
+                sources |= 1 << wifi::SOURCE;
+            }
+            if radio.pwr_line(now) {
+                sources |= 1 << wifi::PWR_SOURCE;
+            }
         }
         sources
     }
@@ -2178,7 +2193,6 @@ impl Soc {
                     || after.ledc != before.ledc
                     || after.i2c != before.i2c
                     || after.aes != before.aes
-                    || after.tbtt != before.tbtt
                     || self.ledc.has_output();
             } else if systimer {
                 self.rearmed |= self.ledc.has_output();
@@ -2253,15 +2267,7 @@ impl Soc {
             i2c_runs: [self.i2c[0].runs(), self.i2c[1].runs()],
             i2c: [self.i2c[0].next_event(), self.i2c[1].next_event()],
             aes: self.aes.next_event(),
-            tbtt: self.tbtt(),
         }
-    }
-
-    /// Where the TBTT the driver armed would first raise the power interrupt, on a chip built
-    /// with its radio. A store that moves it stops the fetch, so the run bounds itself by the new
-    /// one.
-    pub(crate) fn tbtt(&self) -> Option<Tick> {
-        self.radio.as_deref().and_then(Radio::tbtt)
     }
 
     /// Steers the run after a store took the APP CPU's hold from `before`, with `reset` a write

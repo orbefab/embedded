@@ -585,8 +585,10 @@ impl Mcu for Bridge {
         if !matches!(self.power, Power::Init | Power::On { .. }) {
             return Ack::None;
         }
+        let start = self.to_tick(frame.start);
         let at = self.to_tick(at);
         let acked = self.chip.hear(
+            start,
             at,
             &frame.mpdu,
             frame.rate,
@@ -801,6 +803,11 @@ mod tests {
 
     /// The chip of [`bridge`].
     fn chip(gpios: &[u8], stores: &[(u32, u32)]) -> Esp32s3 {
+        chip_after(gpios, &[], stores)
+    }
+
+    /// The chip of [`bridge`], which runs the instructions `first` before the stores.
+    fn chip_after(gpios: &[u8], first: &[u8], stores: &[(u32, u32)]) -> Esp32s3 {
         const BASE: u32 = 0x4037_0000;
         let mut image: Vec<u8> = stores
             .iter()
@@ -808,6 +815,7 @@ mod tests {
             .flat_map(u32::to_le_bytes)
             .collect();
         let entry = BASE + image.len() as u32;
+        image.extend(first);
         for k in 0..stores.len() as u32 {
             for (t, literal) in [(2u8, 2 * k), (3, 2 * k + 1)] {
                 let pc = BASE + image.len() as u32;
@@ -820,17 +828,25 @@ mod tests {
         Esp32s3::new(gpios, entry, [(BASE, image.as_slice())], None)
     }
 
-    /// A bridge with its radio that sets a TBTT every TU with no ahead time at TSF 0 and
-    /// latches it, then enables TBTT 0 and its interrupt with the fifth store, at 350,000 ps,
-    /// where TSF 0 makes that TBTT fall due.
+    /// A bridge with its radio that enables CPU interrupt 1 at level 0 and routes the power
+    /// interrupt to it, then sets a TBTT every TU with no ahead time at TSF 0 and latches it,
+    /// and enables TBTT 0 and its interrupt with the sixth store, 21 cycles in, where TSF 0
+    /// makes that TBTT fall due. The core then takes the interrupt and fetches its vector, where nothing is
+    /// mapped.
     fn tbtt_bridge() -> Bridge {
-        let mut chip = chip(
+        // `movi a7, 2`, `wsr a7, INTENABLE`, `movi a7, 0` and `wsr a7, PS`.
+        let first = [
+            0x72, 0xa0, 0x02, 0x70, 0xe4, 0x13, 0x72, 0xa0, 0x00, 0x70, 0xe6, 0x13,
+        ];
+        let mut chip = chip_after(
             &[],
+            &first,
             &[
+                (0x600c_2000 + 4 * crate::s3::wifi::PWR_SOURCE, 1),
                 (0x6003_5030, 1),
                 (0x6003_5020, 0),
                 (0x6003_500c, 1 << 8),
-                (0x6003_5028, 1 << 26),
+                (0x6003_5028, 0x9c00_0000),
                 (0x6003_5110, 1 << 4),
             ],
         );
@@ -857,24 +873,27 @@ mod tests {
         seen
     }
 
-    /// The TBTT due at the store that armed it stops the run at that store's time, through
-    /// whichever call first reaches it, however the run splits around it.
+    /// The TBTT due at the store that armed it raises the power interrupt there, and the core's
+    /// fetch of its vector stops the run at the same time through whichever call first reaches
+    /// it, however the run splits around it.
     #[test]
-    fn a_tbtt_due_at_its_arming_store_stops_there_however_the_run_splits() {
+    fn a_tbtt_due_at_its_arming_store_stops_at_its_interrupt_however_the_run_splits() {
         let straight = tbtt_stops(None);
-        let at = Time::from_ps(350_000);
-        let [(stop, Some((fault_at, Fault::Refused(refused, _))))] = straight[..] else {
+        let [(stop, Some((fault_at, Fault::UnmappedFetch(pc))))] = straight[..] else {
             panic!("{straight:?}");
         };
+        // The arming store ends 21 cycles in and the fetch comes five cycles later, at
+        // 26 cycles of 25 ns.
         assert_eq!(
-            (stop, fault_at, refused),
-            (at, at, Refused::Register("RADIO", "tbtt"))
+            (stop, fault_at, pc.pc),
+            (Time::from_ps(650_000), stop, 0x4000_0300)
         );
-        let near = (150..200).flat_map(|t| {
-            let ps = time(Tick(t)).as_ps();
+        let arming = stop.as_ps();
+        let near = (0..120).flat_map(|t| {
+            let ps = arming - time(Tick(t)).as_ps();
             [ps - 1, ps, ps + 1]
         });
-        for ps in near.chain([300_000, 360_000, 400_000]) {
+        for ps in near.chain([arming / 2, arming + 10_000, arming + 50_000]) {
             let split = Time::from_ps(ps);
             assert_eq!(tbtt_stops(Some(split)), straight, "split at {ps} ps");
         }

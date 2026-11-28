@@ -1510,10 +1510,72 @@ impl Actives {
         }
     }
 
+    /// Queues `msdu` from the network's router to `sta` at `at` after bringing the network's
+    /// committed and ahead copies into twin agreement at `accepted`. Callers must resettle any
+    /// unaccepted landing after this so the solver sees the new network stop.
+    #[cfg(test)]
+    pub(crate) fn queue_network_msdu(
+        &mut self,
+        world: &World,
+        accepted: Time,
+        at: Time,
+        sta: orbe_net::Mac,
+        msdu: &[u8],
+    ) -> Result<(), crate::session::NetworkSendRejected> {
+        let Some(slot) = self
+            .committed
+            .iter()
+            .position(|core| matches!(core, Core::Net(_)))
+        else {
+            return Err(crate::session::NetworkSendRejected::NoNetwork);
+        };
+        if !matches!(self.ahead[slot].reach, Reach::Twin(twin) if twin == accepted) {
+            self.ahead[slot].rewind(world, &self.committed[slot], accepted);
+            self.ahead[slot].commit(&mut self.committed[slot], &mut self.staged);
+        }
+        match &mut self.committed[slot] {
+            Core::Net(net) => net
+                .send_msdu(at, sta, msdu)
+                .map_err(|_| crate::session::NetworkSendRejected::EventInPast)?,
+            _ => unreachable!(),
+        }
+        match &mut self.ahead[slot].core {
+            Core::Net(net) => net
+                .send_msdu(at, sta, msdu)
+                .expect("twin matches committed network"),
+            _ => unreachable!(),
+        }
+        Ok(())
+    }
+
     /// Each frame a landing handed on, with its sender's slot.
     #[cfg(test)]
     pub(crate) fn aired(&self) -> &[(usize, AirFrame)] {
         self.air.as_ref().map_or(&[], |air| &air.log)
+    }
+
+    /// The first time in `[from, until]` (stepped by `step`) at which active core `slot` is tuned
+    /// to a channel, measured on a clone of its committed copy so `max_step_ps` lookahead never
+    /// shifts the time.
+    #[cfg(test)]
+    pub(crate) fn first_tuned_in(
+        &self,
+        slot: usize,
+        from: Time,
+        until: Time,
+        step: u64,
+    ) -> Option<Time> {
+        let mut core = self.committed[slot].clone();
+        let world = World::default();
+        let mut at = from;
+        while at <= until {
+            let _ = core.run_until(&world, at);
+            if core.tuned().is_some() {
+                return Some(at);
+            }
+            at = Time::from_ps(at.as_ps() + step);
+        }
+        None
     }
 
     /// The run ends at `at`, where every stop up to `at` has landed. Each pulse target takes the

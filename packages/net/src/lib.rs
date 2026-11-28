@@ -91,6 +91,13 @@ pub enum Security<'a> {
     Wpa2Psk { passphrase: &'a str },
 }
 
+/// `send_msdu` was given a time before the network has already run to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PastEvent {
+    pub at: Time,
+    pub reached: Time,
+}
+
 /// The access point a scene sets. Every copy of a network shares it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Config {
@@ -498,6 +505,25 @@ impl Network {
         self.state.rows.drain(..).for_each(&mut row);
     }
 
+    /// The time the network has run to.
+    pub fn reached(&self) -> Time {
+        self.state.reached
+    }
+
+    /// Queues `msdu` (from its LLC/SNAP header on) from the router to `sta` at `at`, sealed under
+    /// CCMP-128 on a WPA2-PSK network. While `sta` dozes, the access point holds it and sets its
+    /// bit in the next Beacon's TIM. Refuses a time before [`reached`](Self::reached).
+    pub fn send_msdu(&mut self, at: Time, sta: Mac, msdu: &[u8]) -> Result<(), PastEvent> {
+        if at < self.state.reached {
+            return Err(PastEvent {
+                at,
+                reached: self.state.reached,
+            });
+        }
+        self.send_data(at, sta, msdu, self.config.psk.is_some());
+        Ok(())
+    }
+
     /// Hands over each MSDU it took from a station past the controlled port, from its LLC
     /// header on, in order.
     #[cfg(feature = "replay")]
@@ -594,7 +620,12 @@ impl Network {
         if mpdu[0] >> 2 & 3 == frame::DATA && mpdu[1] & frame::PROTECTED != 0 {
             match self.seal(&mpdu) {
                 Some(sealed) => mpdu = sealed,
-                None => return true,
+                None => {
+                    if let Some(sta) = pending.to {
+                        self.row(start, Event::Dropped { sta });
+                    }
+                    return true;
+                }
             }
         }
         self.air(start, mpdu, pending.to, rate);
@@ -661,12 +692,21 @@ impl Network {
     fn queue(&mut self, at: Time, to: Mac, out: Out, polled: Option<bool>) {
         if self.state.queue.len() < QUEUE {
             let to = (!to.is_group()).then_some(to);
-            self.state.queue.push_back(Pending {
+            let pending = Pending {
                 ready: at,
                 to,
                 out,
                 polled,
-            });
+            };
+            // Keep `ready` non-decreasing so a frame queued for a later time does not block
+            // earlier answers behind it.
+            let pos = self
+                .state
+                .queue
+                .iter()
+                .rposition(|p| p.ready <= at)
+                .map_or(0, |i| i + 1);
+            self.state.queue.insert(pos, pending);
         } else {
             self.row(at, Event::Dropped { sta: to });
         }
