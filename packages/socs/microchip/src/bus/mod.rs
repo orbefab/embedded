@@ -308,7 +308,7 @@ impl orbe_avr::Bus for Bus {
 
     #[inline(always)]
     fn on_spm(&mut self, pc: u16, cycle: u64) {
-        // DS40002061B §27.2, §27.6: `SPM` is disabled in the Application Flash section
+        // DS40002061B §27.3.1, §27.3.2: `SPM` is disabled in the Application Flash section
         // (`pc < boot_word`) and active only in the Boot Loader Flash section (`BOOTSZ`, Table 27-13).
         if pc >= self.fuses().boot_word {
             self.refuse(crate::Refused::Instruction("spm"), cycle, pc);

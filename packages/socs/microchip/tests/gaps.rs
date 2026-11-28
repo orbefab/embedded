@@ -357,7 +357,7 @@ fn break_is_a_nop_without_dwen_and_refused_with_dwen() {
 
 #[test]
 fn spm_is_a_nop_in_application_flash_and_refused_in_the_boot_section() {
-    // Application section (pc < boot_word): §27.2 disables SPM in hardware, so it is a 1-cycle
+    // Application section (pc < boot_word): §27.3.1 disables SPM in hardware, so it is a 1-cycle
     // no-op and does not refuse.
     let app = run(&[SPM, ldi(16, 0x33), spin()], 20);
     assert_eq!(app.refusal(), None);

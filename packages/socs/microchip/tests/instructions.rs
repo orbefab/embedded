@@ -89,7 +89,7 @@ fn sleep() {
 #[test]
 fn unowned_and_reserved_stores_change_only_what_they_model() {
     // PORTB and GPIOR0..=GPIOR2 take stores; reserved I/O addresses (0x0020, 0x0058) and
-    // DWDR (0x0051) ignore writes and read as zero (§25.4.1, §36). Reserved bits in TCCR0A
+    // DWDR (0x0051) ignore writes and read as zero (§25.6.1, §36). Reserved bits in TCCR0A
     // (bits 3:2, §15.9.1) read as zero, and a reserved waveform mode does not start the counter.
     let mut cpu = Cpu::new();
     cpu.load_words(&[

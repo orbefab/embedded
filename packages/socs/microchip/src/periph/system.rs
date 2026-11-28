@@ -138,7 +138,7 @@ pub(crate) struct System {
     prr: u8,
     /// Stored. EEPROM programming stays on Table 8-2's typical (§9.12.1).
     osccal: u8,
-    /// `GPIOR0` to `GPIOR2` (§7.5.1–§7.5.3).
+    /// `GPIOR0` to `GPIOR2` (§8.6.4–§8.6.6).
     gpior: [u8; 3],
     fuses: Fuses,
     wdt_hz: u32,

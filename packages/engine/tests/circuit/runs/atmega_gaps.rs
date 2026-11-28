@@ -402,7 +402,7 @@ fn twi_slave_via_twar_or_twamr_with_twea_refuses_and_master_stays_quiet() {
 
 #[test]
 fn reserved_io_addresses_read_zero_and_gpior_stores() {
-    // DS40002061B §36, §25.4.1, §27.9.1: reserved I/O addresses (0x0058), `DWDR` with `DWEN`
+    // DS40002061B §36, §25.6.1, §27.9.1: reserved I/O addresses (0x0058), `DWDR` with `DWEN`
     // unprogrammed (0x0051), and read-only `SPMCSR.RWWSB` (0x0057) are not RAM and read as 0.
     for (addr, value) in [(RESERVED_IO, 0xA5), (DWDR, 0xA5), (SPMCSR, 0x40)] {
         let mut words = vec![ldi(16, value)];
@@ -414,7 +414,7 @@ fn reserved_io_addresses_read_zero_and_gpior_stores() {
         assert_eq!(ran.portd(), 0x00, "addr {addr:#06x}");
         assert_eq!(ran.diagnostics(), Vec::<String>::new(), "addr {addr:#06x}");
     }
-    // DS40002061B §7.5: `GPIOR0`, `GPIOR1` and `GPIOR2` are general-purpose R/W registers.
+    // DS40002061B §8.5.1, §8.6.4–§8.6.6: `GPIOR0`, `GPIOR1` and `GPIOR2` are general-purpose R/W registers.
     for (addr, value) in [(GPIOR0, 0xA5), (GPIOR1, 0x5A), (GPIOR2, 0x3C)] {
         let mut words = vec![ldi(16, value)];
         words.extend(sts(addr, 16));
@@ -440,7 +440,7 @@ fn break_runs_as_a_nop_when_dwen_is_unprogrammed() {
 
 #[test]
 fn spm_in_the_application_section_is_a_nop_and_in_the_boot_section_refuses() {
-    // DS40002061B §27.2, §27.6: `SPM` in the Application Flash section (`pc < boot_word`) is
+    // DS40002061B §27.3.1: `SPM` in the Application Flash section (`pc < boot_word`) is
     // disabled by hardware and has no effect.
     let mut app = vec![SPM, ldi(17, 0x33), ldi(16, 0x01), out(DDRB, 16)];
     show_r17(&mut app);
@@ -448,8 +448,8 @@ fn spm_in_the_application_section_is_a_nop_and_in_the_boot_section_refuses() {
     assert_eq!(ran.portd(), 0x33);
     assert_eq!(ran.diagnostics(), Vec::<String>::new());
 
-    // In the Boot Loader Flash section (`pc >= 0x3800` for high fuse 0xD9, Table 27-13), `SPM`
-    // would program flash, so the chip refuses it.
+    // In the Boot Loader Flash section (`pc >= 0x3800` for high fuse 0xD9, §27.3.2, Table 27-13),
+    // `SPM` would program flash, so the chip refuses it.
     let boot_word = 0x3800u16;
     let boot = [SPM, sbi(DDRB, 0), sbi(PORTB, 0), SPIN];
     let mut nl = netlist(&[], &[], serde_json::json!([]), &[]);

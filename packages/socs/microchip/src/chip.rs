@@ -419,7 +419,7 @@ const fn system_328() -> SystemCfg {
     push_reg(&mut regs, owned(0x0061, REG_CLKPR, 0));
     push_reg(&mut regs, owned(0x0064, REG_PRR, 0));
     push_reg(&mut regs, owned(0x0066, REG_OSCCAL, 0));
-    // §7.5.1–§7.5.3. General-purpose I/O registers.
+    // §8.6.4–§8.6.6. General-purpose I/O registers.
     push_reg(&mut regs, owned(0x003E, REG_GPIOR0, 0));
     push_reg(&mut regs, owned(0x004A, REG_GPIOR1, 0));
     push_reg(&mut regs, owned(0x004B, REG_GPIOR2, 0));
