@@ -16,6 +16,8 @@
 # `web` runs `viewer`, then `site-port.test.sh`, `check-site.sh` and `check-engines.sh`,
 # each once.
 # `check-assets.sh` stays separate, because it rebuilds every part model.
+# `diff-esp32s3.sh` stays separate as a by-hand pre-release differential check against Espressif's
+# QEMU on Linux; it does not run in PR CI or nightly.
 # `engine-chips`, `engine-circuits` and `engine-wasm` are the steps of `full` beyond `fast` and
 # `web`, except `scripts/check-speed.sh`. `full` runs those steps in the order below, then the
 # speed check on the package `engine-wasm` built, then `web`. The wasm package check and the

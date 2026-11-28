@@ -3,7 +3,7 @@
 # Sourced by every script that builds Rust or wasm, drives a browser or times the engine
 # and that people start on their own: scripts/check.sh, check-speed.sh, check-wasm.sh,
 # check-site.sh, check-viewer-e2e.sh, check-block.sh, check-headed.sh, check-engines.sh,
-# wasm.sh, site.sh, compare-throughput.sh, run-hashes.sh, release-build.sh and
+# wasm.sh, site.sh, compare-throughput.sh, run-hashes.sh, release-build.sh, diff-esp32s3.sh and
 # packages/engine/scripts/wasi-check.sh. One of them run by another skips the lock.
 # Holds an flock(1) lock on FD 9 of one per-user file in /tmp so every worktree
 # shares one queue and child processes inherit the lock until they all exit,
