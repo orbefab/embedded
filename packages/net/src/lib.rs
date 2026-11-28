@@ -498,6 +498,18 @@ impl Network {
         self.state.rows.drain(..).for_each(&mut row);
     }
 
+    /// The time the network has run to.
+    pub fn reached(&self) -> Time {
+        self.state.reached
+    }
+
+    /// Queues `msdu` (from its LLC/SNAP header on) from the router to `sta` at `at`, sealed under
+    /// CCMP-128 on a WPA2-PSK network. While `sta` dozes, the access point holds it and sets its
+    /// bit in the next Beacon's TIM.
+    pub fn send_msdu(&mut self, at: Time, sta: Mac, msdu: &[u8]) {
+        self.send_data(at, sta, msdu, self.config.psk.is_some());
+    }
+
     /// Hands over each MSDU it took from a station past the controlled port, from its LLC
     /// header on, in order.
     #[cfg(feature = "replay")]

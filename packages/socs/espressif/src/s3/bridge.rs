@@ -585,8 +585,10 @@ impl Mcu for Bridge {
         if !matches!(self.power, Power::Init | Power::On { .. }) {
             return Ack::None;
         }
+        let start = self.to_tick(frame.start);
         let at = self.to_tick(at);
         let acked = self.chip.hear(
+            start,
             at,
             &frame.mpdu,
             frame.rate,
@@ -844,7 +846,7 @@ mod tests {
                 (0x6003_5030, 1),
                 (0x6003_5020, 0),
                 (0x6003_500c, 1 << 8),
-                (0x6003_5028, 1 << 26),
+                (0x6003_5028, 0x9c00_0000),
                 (0x6003_5110, 1 << 4),
             ],
         );

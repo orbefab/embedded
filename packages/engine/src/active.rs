@@ -1481,10 +1481,54 @@ impl Actives {
         }
     }
 
+    /// Queues `msdu` from the network's router to `sta` at `at` (at or after the network's last
+    /// committed landing), resetting the network's ahead copy to match.
+    #[cfg(test)]
+    pub(crate) fn send_to_station(&mut self, at: Time, sta: orbe_net::Mac, msdu: &[u8]) {
+        let slot = self
+            .committed
+            .iter()
+            .position(|core| matches!(core, Core::Net(_)))
+            .expect("the network");
+        let reached = match &mut self.committed[slot] {
+            Core::Net(net) => {
+                net.send_msdu(at, sta, msdu);
+                net.reached()
+            }
+            _ => unreachable!(),
+        };
+        self.ahead[slot].core.clone_from(&self.committed[slot]);
+        self.ahead[slot].reach = Reach::Done(reached);
+    }
+
     /// Each frame a landing handed on, with its sender's slot.
     #[cfg(test)]
     pub(crate) fn aired(&self) -> &[(usize, AirFrame)] {
         self.air.as_ref().map_or(&[], |air| &air.log)
+    }
+
+    /// The first time in `[from, until]` (stepped by `step`) at which active core `slot` is tuned
+    /// to a channel, measured on a clone of its committed copy so `max_step_ps` lookahead never
+    /// shifts the time.
+    #[cfg(test)]
+    pub(crate) fn first_tuned_in(
+        &self,
+        slot: usize,
+        from: Time,
+        until: Time,
+        step: u64,
+    ) -> Option<Time> {
+        let mut core = self.committed[slot].clone();
+        let world = World::default();
+        let mut at = from;
+        while at <= until {
+            let _ = core.run_until(&world, at);
+            if core.tuned().is_some() {
+                return Some(at);
+            }
+            at = Time::from_ps(at.as_ps() + step);
+        }
+        None
     }
 
     /// The run ends at `at`, where every stop up to `at` has landed. Each pulse target takes the

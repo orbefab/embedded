@@ -202,6 +202,91 @@ fn a_frame_ends_in_a_record_halt_however_the_run_splits() {
     }
 }
 
+/// Two unicast frames sent as one hardware TXOP burst (`0x6003_4314` count 1, slot at
+/// `0x6003_437c`) produce two record halts separated by SIFS + ACK + SIFS, and set bits 28 to 31
+/// of `TX_STATUS` to 1, identically however the run splits.
+#[test]
+fn a_txop_burst_ends_each_frame_in_a_record_halt_however_the_run_splits() {
+    const TXOP_CTRL: u32 = 0x6003_4314;
+    const TXOP_SLOT: u32 = 0x6003_437c;
+    const TX_STATUS: u32 = 0x6003_4320;
+    const DESC1: u32 = DESCRIPTOR + 16;
+    const BUF1: u32 = BUFFER + 0x100;
+
+    let build = || {
+        let plcp0 = 0xc000_0000 | (DESCRIPTOR & 0xf_ffff);
+        let words = [
+            ANA_CONF,
+            RF_ON,
+            FREQ,
+            (1 << 8) | (2 * 12),
+            TXOP_SLOT,
+            (28 << 20) | (DESC1 & 0xf_ffff),
+            TXOP_CTRL,
+            1 << 24,
+            PLCP1,
+            28,
+            PLCP0,
+            plcp0,
+        ];
+        let mut program = Program::new(&words);
+        for k in 0..6 {
+            program.l32r(2, 2 * k).l32r(3, 2 * k + 1).rri8(6, 3, 2, 0);
+        }
+        program.raw(&LOOP);
+        let mut chip = program.chip();
+        chip.soc.restore(ANA_CONF, RF_BOOT);
+        chip.use_radio();
+        let head: u32 = 1 << 31 | 1 << 30 | 28 << 12 | 28;
+        for (d, b, seq) in [(DESCRIPTOR, BUFFER, 0x10u8), (DESC1, BUF1, 0x20u8)] {
+            let mut desc = Vec::new();
+            for word in [head, b, 0] {
+                desc.extend(word.to_le_bytes());
+            }
+            chip.soc.poke(d, &desc);
+            let mut frame = [0u8; 28];
+            frame[..4].copy_from_slice(&[0x08, 0x01, 0, 0]);
+            // Individual Address 1 so both frames wait for an ACK.
+            frame[4..10].copy_from_slice(&[0x02, 0x6f, 0x72, 0x62, 0x65, 0x01]);
+            frame[22] = seq;
+            chip.soc.poke(b, &frame);
+        }
+        chip
+    };
+
+    let run = |step: u64| {
+        let mut chip = build();
+        let mut seen = Vec::new();
+        let mut limit = 0;
+        while limit < 120_000 {
+            limit = (limit + step).min(120_000);
+            while let Some(halt) = chip.run_until(c(limit)) {
+                let frame = chip.take_aired();
+                if frame.is_some() {
+                    chip.acked(orbe_model::air::Ack::Acked);
+                }
+                seen.push((halt, frame));
+            }
+        }
+        let status = chip.load_word(TX_STATUS).unwrap();
+        assert_eq!(chip.unmodeled().count(), 0);
+        (seen, status)
+    };
+
+    let (seen, status) = run(120_000);
+    assert_eq!(status, 1 << 28, "completed count 1, TX_SUCCESS");
+    assert_eq!(seen.len(), 2, "{seen:?}");
+    let f0 = seen[0].1.as_ref().unwrap();
+    let f1 = seen[1].1.as_ref().unwrap();
+    assert_eq!(f0.mpdu[22], 0x10);
+    assert_eq!(f1.mpdu[22], 0x20);
+    // SIFS (10 us) + 1 Mb/s ACK (304 us) + SIFS (10 us) = 324 us between frames.
+    assert_eq!(f1.start.0 - f0.end.0, 324 * 480);
+    for step in [7, 333, 1_000, 10_000] {
+        assert_eq!(run(step), (seen.clone(), status), "step {step}");
+    }
+}
+
 /// The station's TBTT, its timing, the TSF control word, TBTT 0's control word and the power
 /// interrupt's enable word.
 const TBTT: u32 = 0x6003_5020;
@@ -240,7 +325,7 @@ fn armed_then(timing: u32, late: Option<(u32, u32)>) -> Esp32s3 {
         TSF_CONTROL,
         1 << 8,
         TBTT_CONTROL,
-        1 << 26,
+        0x9c00_0000,
         PWR_ENABLE,
         1 << 4,
         PASSES,

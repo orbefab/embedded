@@ -405,11 +405,12 @@ impl Esp32s3 {
         self.soc.radio_mut().and_then(wifi::Radio::take_aired)
     }
 
-    /// The radio hears `mpdu`, a frame at `rate` that ended at `at` on the channel it is tuned
-    /// to, at `rssi_dbm` over a noise floor of `noise_dbm`. It returns whether the MAC
-    /// acknowledges it. A frame the model can't receive ends the run at `at`, by name.
+    /// The radio hears `mpdu`, a frame at `rate` that started at `start` and ended at `at` on the
+    /// channel it is tuned to, at `rssi_dbm` over a noise floor of `noise_dbm`. It returns whether
+    /// the MAC acknowledges it. A frame the model can't receive ends the run at `at`, by name.
     pub(crate) fn hear(
         &mut self,
+        start: Tick,
         at: Tick,
         mpdu: &[u8],
         rate: orbe_model::air::Rate,
@@ -417,6 +418,7 @@ impl Esp32s3 {
         noise_dbm: i8,
     ) -> bool {
         let frame = wifi::Heard {
+            start,
             mpdu,
             rate,
             rssi_dbm,

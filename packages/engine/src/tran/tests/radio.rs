@@ -597,3 +597,169 @@ fn the_station_dozes_and_wakes_the_same_however_the_run_splits() {
     assert!(beacons >= 4, "{beacons} beacons");
     assert!(run(Some(1_013_000_000)) == straight, "in steps");
 }
+
+/// Internet checksum (RFC 1071) for constructing ICMP Echo Requests and checking Echo Replies.
+fn inet_checksum(bytes: &[u8]) -> u16 {
+    let mut sum = 0u32;
+    let (chunks, rem) = bytes.as_chunks::<2>();
+    for chunk in chunks {
+        sum += u32::from(u16::from_be_bytes(*chunk));
+    }
+    if let [last] = rem {
+        sum += u32::from(*last) << 8;
+    }
+    while sum > 0xffff {
+        sum = (sum & 0xffff) + (sum >> 16);
+    }
+    !(sum as u16)
+}
+
+/// An LLC/SNAP IPv4 ICMP Echo Request from `src` to `dst` with `id`, `seq` and `payload`.
+fn icmp_echo_request(src: Ipv4Addr, dst: Ipv4Addr, id: u16, seq: u16, payload: &[u8]) -> Vec<u8> {
+    let mut icmp = vec![8, 0, 0, 0];
+    icmp.extend(id.to_be_bytes());
+    icmp.extend(seq.to_be_bytes());
+    icmp.extend(payload);
+    let icmp_sum = inet_checksum(&icmp);
+    icmp[2..4].copy_from_slice(&icmp_sum.to_be_bytes());
+
+    let total = (20 + icmp.len()) as u16;
+    let mut ip = vec![0x45, 0];
+    ip.extend(total.to_be_bytes());
+    ip.extend([0, 0, 0x40, 0, 64, 1, 0, 0]);
+    ip.extend(src.octets());
+    ip.extend(dst.octets());
+    let ip_sum = inet_checksum(&ip);
+    ip[10..12].copy_from_slice(&ip_sum.to_be_bytes());
+
+    let mut msdu = LLC_IPV4.to_vec();
+    msdu.extend(ip);
+    msdu.extend(icmp);
+    msdu
+}
+
+/// After entering power save, the station wakes its RF 3 000 us before each beacon, matching the
+/// ahead time `hal_set_sta_tbtt` programs (not 528 us late).
+#[test]
+fn the_dozing_station_wakes_3000_us_before_its_beacon() {
+    let netlist = station(NETWORK, 3_600);
+    let mut session = open(&netlist, Vec::new(), BUDGET);
+    // Advance just past a doze beacon so `committed[chip]` sits right after a beacon while
+    // dozing, before the next beacon at 3 379 200 us.
+    assert_eq!(
+        session.advance_to(Time::from_ps(3_370 * MS)),
+        Status::Running
+    );
+    let chip = (session.actives.cores().iter())
+        .position(|core| matches!(core, Core::Mcu(_)))
+        .expect("the chip");
+    let beacon_ps = 3_379_200_000_000u64;
+    let wake = session
+        .actives
+        .first_tuned_in(
+            chip,
+            Time::from_ps(beacon_ps - 5_000_000_000),
+            Time::from_ps(beacon_ps),
+            1_000_000,
+        )
+        .expect("station woke its RF before the beacon");
+    // Advance past that beacon and verify it starts at `beacon_ps`.
+    let status = session.advance_to(Time::from_ps(3_400 * MS));
+    assert_eq!(status, Status::Running);
+    let beacon = session
+        .actives
+        .aired()
+        .iter()
+        .map(|(_, f)| f)
+        .find(|f| f.mpdu[0] == 0x80 && f.start.as_ps() == beacon_ps)
+        .expect("the beacon at 3 379 200 us");
+    let lead_us = (beacon.start.as_ps() - wake.as_ps()) / 1_000_000;
+    // TBTT fires at 3 000 us ahead, and the ISR and `rom_open_i2c_xpd` power the RF ~44 us later.
+    assert!(
+        (2_900..=3_000).contains(&lead_us),
+        "expected ~3000 us TBTT lead, got {lead_us} us (wake={} us, beacon={} us)",
+        wake.as_ps() / 1_000_000,
+        beacon.start.as_ps() / 1_000_000,
+    );
+}
+
+/// Two ICMP Echo Requests buffered by the access point while the station dozes are delivered when
+/// the station wakes on the TIM beacon, and lwIP sends both Echo Replies back-to-back through the
+/// hardware TXOP table (`0x6003_437c`).
+#[test]
+fn two_buffered_pings_to_the_dozing_station_are_both_answered() {
+    let netlist = station(NETWORK, 4_600);
+    let mut session = open(&netlist, Vec::new(), BUDGET);
+    assert_eq!(
+        session.advance_to(Time::from_ps(4_300 * MS)),
+        Status::Running
+    );
+    let sta = Mac(STA);
+    let last_ps = session
+        .network_rows()
+        .iter()
+        .rev()
+        .find(|row| matches!(row.event, Event::Doze { .. } | Event::Wake { .. }))
+        .map(|row| row.event.clone());
+    assert_eq!(
+        last_ps,
+        Some(Event::Doze { sta }),
+        "station should be dozing"
+    );
+
+    let router = Ipv4Addr::new(192, 168, 1, 1);
+    let sta_ip = Ipv4Addr::new(192, 168, 1, 100);
+    let ping1 = icmp_echo_request(router, sta_ip, 0x1234, 1, b"first-ping");
+    let ping2 = icmp_echo_request(router, sta_ip, 0x1234, 2, b"second-ping");
+    let inject_at = Time::from_ps(4_300 * MS);
+    session.actives.send_to_station(inject_at, sta, &ping1);
+    session.actives.send_to_station(inject_at, sta, &ping2);
+
+    let status = session.advance_to(Time::from_ps(4_600 * MS));
+    runs_to_its_stop(&session, status);
+
+    let sent = sent_to_the_ap(&session);
+    let answers = sent_to_the_station(&session);
+    let tk = tk(&answers, &sent[3..]);
+    let mut replies: Vec<(u16, Vec<u8>, AirFrame)> = Vec::new();
+    for frame in &sent {
+        if frame.mpdu[0] == 0x08 && frame.mpdu[1] & 0x40 != 0 {
+            let (_, Some(msdu)) = opened(&tk, &frame.mpdu) else {
+                continue;
+            };
+            if msdu.starts_with(&LLC_IPV4) && msdu.len() >= 8 + 20 + 8 {
+                let ip = &msdu[8..];
+                let ihl = usize::from(ip[0] & 0x0f) * 4;
+                let total = usize::from(u16::from_be_bytes([ip[2], ip[3]]));
+                if ip[9] == 1 && total <= ip.len() && total >= ihl + 8 {
+                    let icmp = &ip[ihl..total];
+                    if icmp[0] == 0 && icmp[1] == 0 {
+                        assert_eq!(inet_checksum(icmp), 0, "ICMP reply checksum");
+                        let id = u16::from_be_bytes([icmp[4], icmp[5]]);
+                        let seq = u16::from_be_bytes([icmp[6], icmp[7]]);
+                        if id == 0x1234 {
+                            replies.push((seq, icmp[8..].to_vec(), frame.clone()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let summary: Vec<(u16, Vec<u8>)> = replies
+        .iter()
+        .map(|(seq, body, _)| (*seq, body.clone()))
+        .collect();
+    assert_eq!(
+        summary,
+        vec![(1, b"first-ping".to_vec()), (2, b"second-ping".to_vec()),],
+        "both buffered pings must be answered"
+    );
+    // Both replies go in one hardware TXOP burst, so reply 2 starts SIFS (10 us) after reply 1's
+    // ACK, to the chip's next 480 MHz tick.
+    let after_ack = replies[0].2.end.as_ps() + replies[0].2.rate.acked_after();
+    let gap_ps = replies[1].2.start.as_ps() - after_ack;
+    assert!(
+        (10_000_000..=10_004_168).contains(&gap_ps),
+        "expected SIFS (10 us) TXOP gap after ACK, got {gap_ps} ps"
+    );
+}
