@@ -379,8 +379,10 @@ fn rainbow_on_nano_3v3_sags_resets_pixels_and_warns_regulator_current_limit() {
         snapshot_text.contains("can give 30 mA at 3.3 V"),
         "{snapshot_text}"
     );
+    // The pixels keep running until the rail falls below 90% of their 3 V minimum, so the
+    // regulator sags under a sixth latched pixel before they power down.
     assert!(
-        snapshot_text.contains("has dropped as low as 3.13 V"),
+        snapshot_text.contains("has dropped as low as 2.86 V"),
         "{snapshot_text}"
     );
 

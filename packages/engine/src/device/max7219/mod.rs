@@ -122,7 +122,7 @@ pub(crate) fn chip(part: PartId, dev: &Max7219) -> Chip {
     let mut watches: Vec<Watch> = watched.into_iter().map(watch).collect();
     watches.push(Watch {
         rise: supply(model::RETENTION_VCC_V - BOUND_INSIDE_V),
-        fall: supply(model::RETENTION_VCC_V - 2.0 * BOUND_INSIDE_V),
+        fall: supply(model::RELEASE_VCC_V - BOUND_INSIDE_V),
     });
     let mut signals: Vec<(&'static str, usize)> = watched
         .into_iter()

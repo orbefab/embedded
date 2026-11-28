@@ -44,8 +44,8 @@ pub(crate) fn dc_paths(chain: &Ws2812) -> &'static [(usize, usize)] {
 /// stay few.
 pub const DOUT_DELAY_MAX: u64 = 1_000_000;
 
-/// Margin inside the strict supply comparator so an exact `min_supply` rail reads high and does
-/// not chatter on 1-ULP solver rounding.
+/// Margin inside the supply thresholds so a rail exactly at one reads as at it, and 1-ULP solver
+/// rounding does not move it across.
 const BOUND_INSIDE_V: f64 = 1e-6;
 
 /// No events. A chain takes its bits from the line.
@@ -89,14 +89,15 @@ pub(crate) fn chip(part: PartId, chain: &Ws2812) -> Chip {
     }];
     if let Some(min_supply) = &chain.min_supply {
         let min = min_supply.si.get();
-        let margin = BOUND_INSIDE_V.min(0.25 * min);
-        let supply = |offset| Signal {
+        let release = model::RELEASE_FRACTION * min;
+        let margin = BOUND_INSIDE_V.min(0.25 * release);
+        let supply = |volts: f64| Signal {
             terms: vec![(Node::from(pins[VCC]), 1.0), (Node::from(pins[GND]), -1.0)],
-            offset,
+            offset: volts - margin,
         };
         watches.push(Watch {
-            rise: supply(min - margin),
-            fall: supply(min - 2.0 * margin),
+            rise: supply(min),
+            fall: supply(release),
         });
     }
     Chip {

@@ -10,10 +10,11 @@
 //!
 //! Power-up state (p. 7): all control registers reset to 0x00 (shutdown mode, display test off,
 //! decode mode off, scan limit 0, intensity 0), blanking the display. Digit and Control Registers
-//! (p. 6): digit SRAM keeps its data while `V+` stays above about 2 V. Below [`RETENTION_VCC_V`]
-//! (2.0 V) the host releases `DOUT` and `ISET`, the chip ignores edges, resets to power-up state,
-//! blanks the matrix and draws nothing. Between 2.0 V and the 4.0 V operating minimum (Electrical
-//! Characteristics p. 2), the chip keeps its registers and keeps working.
+//! (p. 6): digit SRAM keeps its data while `V+` stays above about 2 V. The chip powers up once
+//! `V+` rises to [`RETENTION_VCC_V`] (2.0 V) and powers down once it falls below [`RELEASE_VCC_V`]
+//! (1.8 V): powered down, the host releases `DOUT` and `ISET`, and the chip ignores edges, resets
+//! to power-up state, blanks the matrix and draws nothing. Between 2.0 V and the 4.0 V operating
+//! minimum (Electrical Characteristics p. 2), the chip keeps its registers and keeps working.
 //!
 //! Peak segment current `ISEG` is set by the external resistor `RSET` between `V+` and `ISET`
 //! per Table 11 (p. 11) and `VLED`, scaled by `(V+ - V_ISET) / (5.0 - V_ISET)` when `V+` differs
@@ -52,6 +53,9 @@ pub const SAMPLE_ISET: usize = 1;
 /// Between 2.0 V and the 4.0 V operating minimum (Electrical Characteristics p. 2), the chip keeps
 /// its registers and keeps working.
 pub const RETENTION_VCC_V: f64 = 2.0;
+/// The chip powers down and the host releases `DOUT` and `ISET` once `V+` falls below this. The
+/// sheet gives no power-on reset level or hysteresis, so the 0.2 V band is a guess.
+pub const RELEASE_VCC_V: f64 = 1.8;
 
 /// How long a logic input must sit between `VIL` and `VIH` while powered before warning
 /// `chip.protocol` rule `input_level`: 500 ns is well past normal CMOS and BSS138 level-shifter
@@ -338,17 +342,13 @@ impl Max7219 {
 
     fn update_iset(&mut self, v_vcc: f64, v_iset: f64) {
         self.supply_v = v_vcc;
-        let next_a = if v_vcc < RETENTION_VCC_V - 1e-6 {
+        let i_iset = (v_iset - ISET_DROP_V) / ISET_RESISTANCE_OHM;
+        let next_a = if i_iset <= 1e-9 || v_vcc <= v_iset {
             0.0
         } else {
-            let i_iset = (v_iset - ISET_DROP_V) / ISET_RESISTANCE_OHM;
-            if i_iset <= 1e-9 || v_vcc <= v_iset {
-                0.0
-            } else {
-                let rset_ohm = (v_vcc - v_iset) / i_iset;
-                let scale = ((v_vcc - ISET_DROP_V) / (5.0 - ISET_DROP_V)).max(0.0);
-                table11_iseg(rset_ohm, self.vled_v) * scale
-            }
+            let rset_ohm = (v_vcc - v_iset) / i_iset;
+            let scale = ((v_vcc - ISET_DROP_V) / (5.0 - ISET_DROP_V)).max(0.0);
+            table11_iseg(rset_ohm, self.vled_v) * scale
         };
         // Quantize to 100 uA with 100 uA deadband so sub-millivolt rail ripple on a bypass
         // capacitor does not trigger 1 ps redraw stops in Native::follow_draw.
@@ -382,6 +382,7 @@ impl Device for Max7219 {
         format: "gray8",
     };
     const MIN_SUPPLY_V: Option<f64> = Some(RETENTION_VCC_V);
+    const RELEASE_SUPPLY_V: Option<f64> = Some(RELEASE_VCC_V);
     const TRACKS_SUPPLY: bool = true;
 
     fn new(params: &Params<'_>) -> Result<Max7219, Error> {
@@ -512,7 +513,11 @@ impl Device for Max7219 {
         let v_vcc = volts.get(SAMPLE_VCC).copied().unwrap_or(0.0);
         let v_iset = volts.get(SAMPLE_ISET).copied().unwrap_or(0.0);
         let was_powered = self.powered;
-        self.powered = v_vcc >= RETENTION_VCC_V - 1e-6;
+        self.powered = if was_powered {
+            v_vcc >= RELEASE_VCC_V - 1e-6
+        } else {
+            v_vcc >= RETENTION_VCC_V - 1e-6
+        };
         if !self.powered {
             if was_powered {
                 self.reset_registers();

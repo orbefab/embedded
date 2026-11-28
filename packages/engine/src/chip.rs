@@ -33,19 +33,22 @@ pub use op_amp::OpAmp;
 pub use regulator::LinearRegulator;
 pub use relay::Relay;
 
+use crate::active::Powered;
 use crate::logic::Level;
 
 use crate::mna::{Layout, Stamp, Unknowns};
 use crate::watch::Watch;
 
-/// A passive chip's discrete state. A value, replaced at an accepted time and never mutated.
-/// The loop restarts whenever a state changes, so it holds only what the stamp reads. A chip
-/// with memory that leaves its drive alone is an active chip, `active::Chip`, whose restart
-/// compares only its drive image.
+/// A passive chip's discrete state, or an active chip's supply gate. A value, replaced at an
+/// accepted time and never mutated. The loop restarts whenever a state changes, so it holds only
+/// what the stamp reads. A chip with memory that leaves its drive alone is an active chip,
+/// `active::Chip`, whose restart compares only its drive image.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum State {
     Ne555(ne555::State),
     Relay(relay::State),
+    /// Whether an active chip's supply powers its outputs, which its stamp reads.
+    Supply(Powered),
 }
 
 impl State {
@@ -54,6 +57,7 @@ impl State {
         match self {
             State::Ne555(state) => u64::from(state.latch == Level::High),
             State::Relay(state) => 2 + u64::from(state.contact == crate::netlist::Contact::Closed),
+            State::Supply(powered) => 4 + u64::from(powered == Powered::On),
         }
     }
 }

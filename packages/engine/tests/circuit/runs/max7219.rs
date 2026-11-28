@@ -544,10 +544,14 @@ fn supply_dip_retains_registers_down_to_2v_and_resets_below_2v() {
         lit_of(&s)
     };
 
-    for dip in [3.999, 3.3, 2.5, 2.0] {
+    for dip in [3.999, 3.3, 2.5, 2.0, 1.8] {
         assert_eq!(run_dip(dip), 8, "dip={dip}V should retain registers");
     }
-    assert_eq!(run_dip(1.9), 0, "dip=1.9V below 2 V floor should reset");
+    assert_eq!(
+        run_dip(1.7),
+        0,
+        "dip=1.7V below 1.8 V release floor should reset"
+    );
 }
 
 #[test]
