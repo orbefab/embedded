@@ -1,6 +1,8 @@
 //! Whole-chip tests for a chip built with its Wi-Fi radio: the radio's words are kept and read
 //! back, a chip without it refuses them as before, the PHY's write of `SENS_IOMUX_CLK_EN` is not
-//! listed, and a frame the MAC sends ends in a record halt.
+//! listed, a frame the MAC sends ends in a record halt, and the run ends where an armed TBTT
+//! would raise the power interrupt, even at the store that armed it, or not at all once a
+//! store disarms it, however the run is split.
 
 use super::*;
 
@@ -168,4 +170,259 @@ fn a_frame_ends_in_a_record_halt_however_the_run_splits() {
     for step in [1, 7, 333, 1_000] {
         assert_eq!(run(step), seen, "step {step}");
     }
+}
+
+/// The station's TBTT, its timing, the TSF control word, TBTT 0's control word and the power
+/// interrupt's enable word.
+const TBTT: u32 = 0x6003_5020;
+const TBTT_TIMING: u32 = 0x6003_5030;
+const TSF_CONTROL: u32 = 0x6003_500c;
+const TBTT_CONTROL: u32 = 0x6003_5028;
+const PWR_ENABLE: u32 = 0x6003_5110;
+/// The timing of a TBTT every `tu` TU, 10 us ahead.
+const fn every(tu: u32) -> u32 {
+    10 << 16 | tu
+}
+/// The passes of the count down between the arming and the late store.
+const PASSES: u32 = 3_000;
+/// Where the TBTT every TU from TSF 0 would first raise the power interrupt: 10 us before
+/// 1024 us.
+const TBTT_AT: u64 = 1014 * 40;
+
+/// Sets a TBTT at TSF 0 with `timing` and latches it, as `hal_set_sta_tbtt` does, then enables
+/// TBTT 0 and its interrupt, as `hal_enable_sta_tbtt` does. It counts `PASSES` down, makes the
+/// store `late` if any, and then counts up without end, so no fetch spins.
+fn armed_then(timing: u32, late: Option<(u32, u32)>) -> Esp32s3 {
+    let mut words = vec![
+        TBTT_TIMING,
+        timing,
+        TBTT,
+        0,
+        TSF_CONTROL,
+        1 << 8,
+        TBTT_CONTROL,
+        1 << 26,
+        PWR_ENABLE,
+        1 << 4,
+        PASSES,
+    ];
+    words.extend(late.into_iter().flat_map(|(at, value)| [at, value]));
+    let mut program = Program::new(&words);
+    for k in 0..5 {
+        program.l32r(2, 2 * k).l32r(3, 2 * k + 1).s32i(3, 2, 0);
+    }
+    program.l32r(4, 10);
+    let down = program.pc();
+    program.addi(4, 4, -1).bnez(4, down);
+    if late.is_some() {
+        program.l32r(2, 11).l32r(3, 12).s32i(3, 2, 0);
+    }
+    let up = program.pc();
+    program.addi(5, 5, 1).j(up);
+    let mut chip = program.chip();
+    chip.use_radio();
+    chip
+}
+
+/// A run of [`armed_then`]: its name, its chip, and where it ends as `tbtt`, if it does.
+struct TbttRun {
+    name: &'static str,
+    chip: fn() -> Esp32s3,
+    ends: Option<Tick>,
+}
+
+/// The three runs: armed to the end, disarmed by the late store, and re-timed by it from 2 TU
+/// to 1 TU.
+fn tbtt_runs() -> [TbttRun; 3] {
+    [
+        TbttRun {
+            name: "armed",
+            chip: || armed_then(every(1), None),
+            ends: Some(c(TBTT_AT)),
+        },
+        TbttRun {
+            name: "disarmed",
+            chip: || armed_then(every(1), Some((PWR_ENABLE, 0))),
+            ends: None,
+        },
+        TbttRun {
+            name: "retimed",
+            chip: || armed_then(every(2), Some((TBTT_TIMING, every(1)))),
+            ends: Some(c(TBTT_AT)),
+        },
+    ]
+}
+
+/// The run's limit, two TUs.
+const TBTT_LIMIT: u64 = 80_000;
+
+/// Every halt of a run to `TBTT_LIMIT` cycles, stepped through each limit of `splits` first.
+/// Each halt comes from the first call whose limit reaches it.
+fn halts(mut chip: Esp32s3, splits: &[u64]) -> Vec<Halt> {
+    let mut seen = Vec::new();
+    let mut served = None;
+    for &limit in splits.iter().chain([&TBTT_LIMIT]) {
+        while let Some(halt) = chip.run_until(c(limit)) {
+            assert!(
+                served.is_none_or(|served| halt.at() > c(served)),
+                "{halt:?} after a call to {served:?} returned"
+            );
+            seen.push(halt);
+        }
+        served = Some(limit);
+    }
+    assert_eq!(chip.unmodeled().count(), 0);
+    seen
+}
+
+/// The cycles at which the radio's TBTT deadline changes, stepping one cycle at a time to
+/// `until`.
+fn tbtt_moves(mut chip: Esp32s3, until: u64) -> Vec<u64> {
+    let mut moves = Vec::new();
+    let mut last = None;
+    for cycle in 1..=until {
+        chip.run_until(c(cycle));
+        let now = chip.soc.radio().and_then(wifi::Radio::tbtt);
+        if now != last {
+            moves.push(cycle);
+            last = now;
+        }
+    }
+    moves
+}
+
+/// The one-shot run ends as `tbtt` where the TBTT would first raise the power interrupt, or not
+/// at all when the late store disarmed it, although the program never spins, so nothing but the
+/// deadline stops the core there.
+#[test]
+fn a_straight_run_ends_at_the_tbtt_it_armed_and_not_at_one_it_disarmed() {
+    for TbttRun { name, chip, ends } in tbtt_runs() {
+        let seen = halts(chip(), &[]);
+        match (ends, &seen[..]) {
+            (None, []) => {}
+            (Some(at), [Halt::Fault(fault_at, Fault::Refused(refused, _))]) => {
+                assert_eq!(
+                    (*fault_at, *refused),
+                    (at, Refused::Register("RADIO", "tbtt"))
+                );
+            }
+            _ => panic!("{name}: {seen:?}"),
+        }
+    }
+}
+
+/// The run ends the same way in 1 000-cycle chunks, in two chunks split before the late store
+/// and in three split around it.
+#[test]
+fn a_chunked_run_ends_as_the_straight_run_does() {
+    for TbttRun { name, chip, .. } in tbtt_runs() {
+        let straight = halts(chip(), &[]);
+        let chunks: Vec<u64> = (1..TBTT_LIMIT / 1_000).map(|k| k * 1_000).collect();
+        assert_eq!(
+            halts(chip(), &chunks),
+            straight,
+            "{name}: 1 000-cycle chunks"
+        );
+        assert_eq!(halts(chip(), &[5_000]), straight, "{name}: split at 5 000");
+        assert_eq!(
+            halts(chip(), &[5_000, 20_000]),
+            straight,
+            "{name}: split at 5 000 and 20 000"
+        );
+    }
+}
+
+/// Every split gives the straight run's halts: each cycle around the arming, the late store
+/// and the deadline, and every 997th cycle, alone and in pairs.
+#[test]
+fn every_split_of_a_tbtt_run_ends_as_the_straight_run_does() {
+    for TbttRun { name, chip, .. } in tbtt_runs() {
+        let straight = halts(chip(), &[]);
+        let moves = tbtt_moves(chip(), 20_000);
+        // The arming, then the late store between the chunked test's splits at 5 000 and
+        // 20 000.
+        assert!(moves[0] < 5_000, "{name}: {moves:?}");
+        assert!(
+            moves[1..].iter().all(|at| (5_000..20_000).contains(at)) && moves.len() <= 2,
+            "{name}: {moves:?}"
+        );
+        let mut splits: Vec<u64> = (1..TBTT_LIMIT / 997).map(|k| k * 997).collect();
+        for at in moves.iter().copied().chain([TBTT_AT]) {
+            splits.extend(at.saturating_sub(12)..at + 12);
+        }
+        splits.sort_unstable();
+        splits.dedup();
+        for &split in &splits {
+            assert_eq!(
+                halts(chip(), &[split]),
+                straight,
+                "{name}: split at {split}"
+            );
+        }
+        for &first in &moves {
+            for &second in &moves {
+                for (a, b) in [
+                    (first - 1, second + 1),
+                    (first, second),
+                    (first + 1, TBTT_AT),
+                ] {
+                    if a < b {
+                        assert_eq!(
+                            halts(chip(), &[a, b]),
+                            straight,
+                            "{name}: splits at {a} and {b}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// With no ahead time, a TBTT every TU from TSF 0 armed at TSF 0 falls due at the arming store
+/// itself. The call whose limit reaches the store ends the run there, at every split around it.
+#[test]
+fn a_tbtt_due_at_its_arming_store_ends_the_call_that_ran_it() {
+    let chip = || armed_then(1, None);
+    let arming = tbtt_moves(chip(), 100)[0];
+    let straight = halts(chip(), &[]);
+    let [Halt::Fault(at, Fault::Refused(refused, _))] = straight[..] else {
+        panic!("{straight:?}");
+    };
+    assert_eq!(
+        (at, refused),
+        (c(arming), Refused::Register("RADIO", "tbtt"))
+    );
+    for split in 1..arming + 12 {
+        assert_eq!(halts(chip(), &[split]), straight, "split at {split}");
+    }
+}
+
+/// The TBTTs fall at the TSF's whole TUs, so the first one the arming lets through is at
+/// 1024 us, and its interrupt would come 10 us before. The run ends there by name, however it
+/// steps. Disarmed, it runs on.
+#[test]
+fn the_run_ends_where_an_armed_tbtt_would_raise_the_power_interrupt() {
+    let run = |step: u64| {
+        let mut chip = armed_then(every(1), None);
+        let mut limit = 0;
+        loop {
+            limit += step;
+            if let Some(halt) = chip.run_until(c(limit)) {
+                return halt;
+            }
+        }
+    };
+    let halt = run(100_000);
+    let Halt::Fault(at, Fault::Refused(refused, _)) = halt else {
+        panic!("{halt:?}");
+    };
+    assert_eq!(at, c(TBTT_AT));
+    assert_eq!(refused, Refused::Register("RADIO", "tbtt"));
+    for step in [1_000, 7_777, 40_559, 40_560] {
+        assert_eq!(run(step), halt, "step {step}");
+    }
+
+    let mut chip = armed_then(every(1), Some((PWR_ENABLE, 0)));
+    assert_eq!(chip.run_until(c(100_000)), None);
 }

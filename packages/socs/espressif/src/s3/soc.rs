@@ -401,7 +401,7 @@ fn effect(addr: u32) -> Option<Effect> {
 }
 
 /// The watchdog deadline, the next LEDC event and the I2C controllers', whether each I2C runs,
-/// and any active AES DMA deadline.
+/// any active AES DMA deadline, and where an armed TBTT would raise the power interrupt.
 #[derive(Debug, PartialEq, Eq)]
 struct Armed {
     deadline: Option<Expiry>,
@@ -409,6 +409,7 @@ struct Armed {
     i2c_runs: [bool; 2],
     i2c: [Option<Tick>; 2],
     aes: Option<Tick>,
+    tbtt: Option<Tick>,
 }
 
 impl Soc {
@@ -2177,6 +2178,7 @@ impl Soc {
                     || after.ledc != before.ledc
                     || after.i2c != before.i2c
                     || after.aes != before.aes
+                    || after.tbtt != before.tbtt
                     || self.ledc.has_output();
             } else if systimer {
                 self.rearmed |= self.ledc.has_output();
@@ -2251,7 +2253,15 @@ impl Soc {
             i2c_runs: [self.i2c[0].runs(), self.i2c[1].runs()],
             i2c: [self.i2c[0].next_event(), self.i2c[1].next_event()],
             aes: self.aes.next_event(),
+            tbtt: self.tbtt(),
         }
+    }
+
+    /// Where the TBTT the driver armed would first raise the power interrupt, on a chip built
+    /// with its radio. A store that moves it stops the fetch, so the run bounds itself by the new
+    /// one.
+    pub(crate) fn tbtt(&self) -> Option<Tick> {
+        self.radio.as_deref().and_then(Radio::tbtt)
     }
 
     /// Steers the run after a store took the APP CPU's hold from `before`, with `reset` a write

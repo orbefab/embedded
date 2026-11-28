@@ -1,14 +1,16 @@
 //! An ESP32-S3 in a netlist with a network is built with its radio. The stock Arduino station
 //! sketch then gets through `esp_wifi_init` and `esp_wifi_start`, which `WiFi.mode(WIFI_STA)`
 //! runs, with no diagnostic, and its scan puts a probe request on the air on each channel and
-//! finds the network on its own. Without the network the same app stops at the radio, as before.
+//! finds the network on its own. Its `WiFi.begin()` then authenticates, associates and runs the
+//! 4-way handshake, and the run ends at its first frame that needs the MAC to encrypt it.
+//! Without the network the same app stops at the radio, as before.
 
 use std::sync::Arc;
 
 use orbe_mcu::Setting;
 use orbe_model::Time;
 use orbe_model::air::{AirFrame, Rate};
-use orbe_net::Event;
+use orbe_net::{Event, Mac};
 
 use super::active::run_active;
 use super::fixtures::open;
@@ -16,7 +18,7 @@ use crate::active::Core;
 use crate::blob::Blobs;
 use crate::diagnostic::Diagnostic;
 use crate::netlist::Netlist;
-use crate::session::{BUDGET, SerialCursor};
+use crate::session::{BUDGET, SerialCursor, Session, Status};
 
 const MS: u64 = 1_000_000_000;
 
@@ -226,14 +228,7 @@ fn the_stock_stations_scan_finds_the_network_on_its_channel() {
         "{:?}",
         session.diagnostics()
     );
-    let uart0 = (session.usarts().iter())
-        .position(|(_, usart)| *usart == "UART0")
-        .expect("UART0");
-    let (bytes, _) = session.serial_since(SerialCursor::default()).unwrap();
-    let text: String = (bytes.iter())
-        .filter(|byte| usize::from(byte.usart) == uart0)
-        .map(|byte| char::from(byte.byte))
-        .collect();
+    let text = printed(&session);
     assert!(
         text.contains("mode 1\nscan 1\nap orbe ch 6\n"),
         "UART0 output:\n{text}"
@@ -242,4 +237,165 @@ fn the_stock_stations_scan_finds_the_network_on_its_channel() {
         .filter(|row| matches!(row.event, Event::Lost { .. }))
         .collect();
     assert!(lost.is_empty(), "{lost:?}");
+}
+
+/// The access point's BSSID in [`NETWORK`].
+const AP: [u8; 6] = [0x02, 0x6f, 0x72, 0x62, 0x65, 0x01];
+
+/// What UART0 printed.
+fn printed(session: &Session) -> String {
+    let uart0 = (session.usarts().iter())
+        .position(|(_, usart)| *usart == "UART0")
+        .expect("UART0");
+    let (bytes, _) = session.serial_since(SerialCursor::default()).unwrap();
+    (bytes.iter())
+        .filter(|byte| usize::from(byte.usart) == uart0)
+        .map(|byte| char::from(byte.byte))
+        .collect()
+}
+
+/// Each frame the chip sent to the access point, once each.
+fn sent_to_the_ap(session: &Session) -> Vec<AirFrame> {
+    let chip = (session.actives.cores().iter())
+        .position(|core| matches!(core, Core::Mcu(_)))
+        .expect("the chip");
+    let mut sent: Vec<AirFrame> = Vec::new();
+    for (sender, frame) in session.actives.aired() {
+        // A landing run again after a rewind hands its frame on again.
+        if *sender == chip && frame.mpdu[4..10] == AP && !sent.iter().any(|f| f.end == frame.end) {
+            sent.push(frame.clone());
+        }
+    }
+    sent
+}
+
+/// The run ends where the chip's MAC would first encrypt a frame, by name.
+fn ends_at_the_first_protected_frame(session: &Session, status: Status) -> Time {
+    assert_eq!(status, Status::Faulted);
+    match session.fault() {
+        Some(&Diagnostic::ChipUnsupportedSetting {
+            peripheral: "RADIO",
+            setting: Setting::Register("tx_protected"),
+            at,
+            ..
+        }) => at,
+        fault => panic!("{fault:?}"),
+    }
+}
+
+/// The network's rows other than the station's power-save ones.
+fn joined(session: &Session) -> Vec<Event> {
+    (session.network_rows().iter())
+        .map(|row| row.event.clone())
+        .filter(|event| !matches!(event, Event::Doze { .. } | Event::Wake { .. }))
+        .collect()
+}
+
+/// The sequence number of a frame's Sequence Control field (IEEE 802.11-2020, 9.2.4.4).
+fn sequence(mpdu: &[u8]) -> u16 {
+    u16::from_le_bytes([mpdu[22], mpdu[23]]) >> 4
+}
+
+/// The Retry bit of Frame Control (9.2.4.1.6).
+const RETRY: u8 = 0x08;
+
+/// The stock station's `WiFi.begin("orbe", "orbe-password")` joins the network: the network
+/// logs its Open System authentication, its association as AID 1 and the end of the 4-way
+/// handshake, and loses no frame. The station sends a Deauthentication, the Authentication and
+/// the Association Request, whose sequence numbers the driver counts on from the scan, then the
+/// 4-way handshake's messages 2 and 4 as Data frames numbered 0 and 1, each acknowledged, so
+/// none carries the Retry bit. Once the handshake has installed the keys, the driver's next
+/// frame is a protected Data frame, which the MAC would encrypt with the key table's entry. The
+/// model does not, so the run ends there, at about 3.21 s, as `tx_protected`. That frame is
+/// lwIP's DHCP Discover, which the DHCP client sends only once `WIFI_EVENT_STA_CONNECTED` has
+/// started it, so the station is connected by then.
+#[test]
+fn the_stock_station_joins_the_network_and_ends_at_its_first_protected_frame() {
+    let netlist = station(NETWORK, 3400);
+    let mut session = open(&netlist, Vec::new(), BUDGET);
+    let status = session.advance_to(Time::from_ps(3400 * MS));
+    let at = ends_at_the_first_protected_frame(&session, status);
+    assert!((3200..3250).contains(&(at.as_ps() / MS)), "{at:?}");
+    assert!(
+        session.diagnostics().is_empty(),
+        "{:?}",
+        session.diagnostics()
+    );
+    let text = printed(&session);
+    assert!(
+        text.ends_with("scan 1\nap orbe ch 6\n"),
+        "UART0 output:\n{text}"
+    );
+
+    let sta = Mac(STA);
+    assert_eq!(
+        joined(&session),
+        [
+            Event::Auth { sta, status: 0 },
+            Event::Assoc {
+                sta,
+                status: 0,
+                aid: Some(1)
+            },
+            Event::Handshake { sta },
+        ]
+    );
+
+    let sent = sent_to_the_ap(&session);
+    let kinds: Vec<[u8; 2]> = sent.iter().map(|f| [f.mpdu[0], f.mpdu[1]]).collect();
+    // Deauthentication, Authentication and Association Request (9.2.4.1.3), then two Data
+    // frames to the DS.
+    assert_eq!(
+        kinds,
+        [[0xc0, 0], [0xb0, 0], [0x00, 0], [0x08, 0x01], [0x08, 0x01]]
+    );
+    let numbers: Vec<u16> = sent.iter().map(|f| sequence(&f.mpdu)).collect();
+    let first = numbers[0];
+    assert_eq!(numbers, [first, first + 1, first + 2, 0, 1]);
+    for frame in &sent[3..] {
+        // LLC/SNAP and the EAPOL EtherType, then an EAPOL-Key (IEEE 802.1X-2020, 11.3).
+        assert_eq!(frame.mpdu[24..32], [0xaa, 0xaa, 0x03, 0, 0, 0, 0x88, 0x8e]);
+        assert_eq!(frame.mpdu[33], 3, "EAPOL-Key");
+    }
+}
+
+/// When the station's Authentication reaches the network but the ACK does not reach the
+/// station, its MAC reports an ACK timeout and the driver sends the same frame again, with the
+/// same sequence number and the Retry bit set, after the ACK would have ended. The network
+/// answers both, and the join goes on to the same end.
+#[test]
+fn a_lost_ack_has_the_driver_send_the_authentication_again_with_the_retry_bit() {
+    let netlist = station(NETWORK, 3400);
+    let mut session = open(&netlist, Vec::new(), BUDGET);
+    session.actives.lose_acks(|frame| {
+        frame.mpdu[0] == 0xb0 && frame.mpdu[1] & RETRY == 0 && frame.mpdu[10..16] == STA
+    });
+    let status = session.advance_to(Time::from_ps(3400 * MS));
+    ends_at_the_first_protected_frame(&session, status);
+
+    let sent = sent_to_the_ap(&session);
+    let auth: Vec<&AirFrame> = sent.iter().filter(|f| f.mpdu[0] == 0xb0).collect();
+    let [first, again] = auth[..] else {
+        panic!("{auth:?}");
+    };
+    assert_eq!(first.mpdu[1], 0);
+    assert_eq!(again.mpdu[1], RETRY);
+    assert_eq!(first.mpdu[2..], again.mpdu[2..], "the same frame");
+    let acked = first.end.as_ps() + first.rate.acked_after();
+    assert!(again.start.as_ps() > acked, "{again:?} after {first:?}");
+
+    let sta = Mac(STA);
+    assert_eq!(
+        joined(&session),
+        [
+            Event::Auth { sta, status: 0 },
+            Event::Auth { sta, status: 0 },
+            Event::Assoc {
+                sta,
+                status: 0,
+                aid: Some(1)
+            },
+            Event::Handshake { sta },
+        ]
+    );
 }

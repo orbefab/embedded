@@ -34,6 +34,19 @@
 //! `wdevProcessRxSucDataAll`, `wDev_AppendRxBlocks`, `hal_mac_set_addr`, `hal_mac_set_bssid` and
 //! `hal_get_tsf_time`, and from esp32-open-mac's work on the ESP32's MAC, and each is a guess.
 //!
+//! The join after the scan touches more, from `hal_crypto_*`, `hal_tsf`, `hal_coex`,
+//! `ic_update_sta_tsf`, `pm_update_next_tbtt` and the ROM's `coex_hw_timer_*`, and each meaning
+//! is a guess: the key table is storage ([`KEYS`]), a TSF load sets a timer and a TBTT latch
+//! sets a TBTT's start ([`TSF_CONTROL`]), and the MAC's clock counts microseconds
+//! ([`MAC_CLOCK`]). What the model does not run is refused by name: a frame the MAC would
+//! encrypt or decrypt with the key table (`tx_protected`, `rx_protected`), a coexistence timer
+//! turned on (`coex_timer`), the beacon filter turned on (`beacon_filter`), the interrupt of a
+//! TBTT other than 0 or of a TSF timer's alarm (`tbtt_intr`, `tsf_timer`), any bit of the TSF
+//! and TBTT words that no blob function sets (`tsf_control`, `tbtt_control`, `tbtt_start`,
+//! `pwr_intr`), and an armed TBTT, where the run ends as `tbtt` ([`Radio::tbtt`]). The driver
+//! itself numbers each frame and sets its Retry bit when it sends it again after an ACK timeout,
+//! so the MAC sends the buffer as it is.
+//!
 //! Any other access in these blocks is refused or listed as on a chip with no radio.
 
 use std::sync::Arc;
@@ -43,7 +56,7 @@ use orbe_model::air::{Ack, Mcs, Ofdm, Preamble, Rate};
 use super::clock::{TICK_HZ, Tick};
 
 /// The words kept, sorted.
-const WORDS: [u32; 280] = [
+const WORDS: [u32; 289] = [
     // FE2
     0x6000_50f0,
     // FE
@@ -235,6 +248,7 @@ const WORDS: [u32; 280] = [
     0x6003_3094,
     0x6003_3098,
     0x6003_309c,
+    0x6003_30a0,
     0x6003_30d8,
     0x6003_30dc,
     0x6003_30e0,
@@ -323,15 +337,23 @@ const WORDS: [u32; 280] = [
     0x6003_5014,
     0x6003_5018,
     0x6003_501c,
+    0x6003_5020,
     0x6003_5024,
     0x6003_5028,
     0x6003_502c,
+    0x6003_5030,
     0x6003_5058,
+    0x6003_5080,
     0x6003_5084,
+    0x6003_5088,
+    0x6003_508c,
+    0x6003_5090,
     0x6003_5094,
     0x6003_509c,
     0x6003_50a8,
     0x6003_50b8,
+    0x6003_50c0,
+    0x6003_5110,
     0x6003_5118,
     0x6003_511c,
     0x6003_5128,
@@ -446,21 +468,128 @@ const FILTER_MATCH_SHIFT: u32 = 28;
 /// follows it, then its FCS, as `wDev_ProcessRxSucData` reads the frame at 48 bytes in.
 const RX_CTRL: usize = 48;
 
-/// The TSF timers' control word. A store that sets one of bits 0 to 3 copies timer `n`'s count
-/// into [`TSF_LOW`] and [`TSF_HIGH`], as `hal_get_tsf_time` and `tsf_hal_get_counter_value` set
-/// bit `n`, read the two and clear it. Bits 4 and 5, which `hal_mac_tsf_reset` sets after it
-/// writes 0 to `0x6003_5010` and `0x6003_5014`, load a timer, and the model refuses them by name,
-/// `tsf_load`. The model keeps the two words it loads from as last written.
+/// The MAC's clock, which `hal_now` and `esp_wifi_internal_get_mac_clock_time` read: "32-bit
+/// time value, unit: microsecond" (IDF v5.5.5, `components/esp_wifi/include/esp_private/wifi.h`).
+/// `ic_update_sta_tsf` subtracts a frame's `rx_ctrl` timestamp from it, so the model reads the
+/// same count, [`tsf`]'s low 32 bits.
+const MAC_CLOCK: u32 = 0x6003_5000;
+
+/// The TSF timers' control word, as the Arduino-ESP32 3.3.12 blobs set its bits, timer or TBTT
+/// `n` from 0 to 3:
+/// - Bit `n` copies timer `n`'s count into [`TSF_LOW`] and [`TSF_HIGH`]: `tsf_hal_get_counter_value`,
+///   `hal_get_tsf_time`, `hal_get_sta_tsf` and `hal_mac_tsf_get_time` set it, read the two and
+///   clear it.
+/// - Bit `4 + n` loads timer `n` with the count in [`TSF_LOAD_LOW`] and [`TSF_LOAD_HIGH`], and the
+///   timer counts on from it: `tsf_hal_set_counter_value` writes the count there and sets the
+///   bit, `hal_set_sta_tsf` and `hal_mac_tsf_set_time` do so for timers 0 and 1, and
+///   `hal_mac_tsf_reset` loads 0 into them.
+/// - Bit `8 + n` latches the start in [`TBTT`] as TBTT `n`'s: `tsf_hal_set_tbtt_start_time` and
+///   `hal_set_sta_tbtt` write the word and then set the bit.
+///
+/// No function clears a load or latch bit, so the model clears them at once and they read 0
+/// after the store, a guess. No function sets bits 12 to 31, and a store that does is refused by
+/// name, `tsf_control`.
 const TSF_CONTROL: u32 = 0x6003_500c;
 const TSF_LATCH: u32 = 0xf;
-const TSF_LOAD: u32 = 0x30;
+const TSF_LOAD_SHIFT: u32 = 4;
+const TBTT_LATCH_SHIFT: u32 = 8;
+const TSF_CONTROL_BITS: u32 = 0xfff;
+/// The TSF timers, and the TBTTs, each one's own.
+const TSF_TIMERS: usize = 4;
+const TSF_LOAD_LOW: u32 = 0x6003_5010;
+const TSF_LOAD_HIGH: u32 = 0x6003_5014;
 const TSF_LOW: u32 = 0x6003_5018;
 const TSF_HIGH: u32 = 0x6003_501c;
 
-/// The TSF at `now` in microseconds, as IEEE 802.11-2020 counts it (11.1.3.1). Every timer counts
-/// it from the chip's start, until a load, which the model refuses: the origin, and that the four
-/// timers agree, are guesses. `rx_ctrl`'s `timestamp`, which IDF gives in microseconds, is its
-/// low 32 bits.
+/// The coexistence timers' control words, timer `n`'s at [`COEX_TIMERS`] `+ 8 n`, as the ROM's
+/// `coex_hw_timer_set`, `coex_hw_timer_enable` and `coex_hw_timer_disable` write them. Bit 31 runs
+/// the timer to the alarm `coex_hw_timer_set` writes into the next word from [`MAC_CLOCK`]. The
+/// alarm is not modelled: a store that sets bit 31 is refused by name, `coex_timer`.
+const COEX_TIMERS: u32 = 0x6003_50a8;
+const COEX_TIMER_COUNT: u32 = 4;
+const COEX_TIMER_ON: u32 = 1 << 31;
+
+/// Whether `addr` is a coexistence timer's control word.
+fn coex_timer(addr: u32) -> bool {
+    addr.checked_sub(COEX_TIMERS)
+        .is_some_and(|at| at.is_multiple_of(8) && at / 8 < COEX_TIMER_COUNT)
+}
+
+/// The power interrupt's enable word, `ETS_WIFI_PWR_INTR_SOURCE` (2 in IDF v5.5.5,
+/// `components/soc/esp32s3/include/soc/interrupts.h`). `tsf_hal_set_tbtt_intr_enable` sets bit
+/// `4 - n` for TBTT `n`, and `hal_enable_sta_tbtt` bit 4 for TBTT 0. `tsf_hal_set_timer_intr_enable`
+/// and `hal_enable_tsf_timer` set bit `8 - n` for timer `n`'s alarm. Each first sets the same bit
+/// of `0x6003_511c`, which `pwr_hal_clear_intr_status` writes too, the interrupt's clear word,
+/// which with no interrupt raised clears nothing. While bit 4 is set and TBTT 0 is on
+/// ([`TBTT_CONTROL`]), TBTT 0 would raise the interrupt, which the model does not run: the chip
+/// ends the run by name, `tbtt`, where it first would, as [`Radio::tbtt`] reckons it. A store
+/// that sets the bit of another TBTT is refused by name, `tbtt_intr`, and one of a timer's
+/// alarm, whose target words the model does not keep, `tsf_timer`. No function sets bit 0 or
+/// bits 9 to 31, and a store that does is refused by name, `pwr_intr`.
+const PWR_ENABLE: u32 = 0x6003_5110;
+const PWR_TBTT: u32 = 1 << 4;
+const PWR_TBTT_OTHERS: u32 = 0b1110;
+const PWR_TSF_TIMERS: u32 = 0xf << 5;
+const PWR_BITS: u32 = 0x1fe;
+/// The start of a TBTT, bits 0 to 25 of its TSF count, which a latch bit of [`TSF_CONTROL`] makes
+/// TBTT `n`'s. `tsf_hal_set_tbtt_start_time` keeps bits 26 to 31 as they read, and no function
+/// sets them: a store that does is refused by name, `tbtt_start`.
+const TBTT: u32 = 0x6003_5020;
+const TBTT_FIELD: u32 = (1 << 26) - 1;
+/// TBTT 0's control word, the first of the four TBTT and TSF groups 12 bytes apart
+/// (`tsf_hal_set_tbtt_enable` and `tsf_hal_set_tsf_enable` pick `0x6003_5028`, `5034`, `5040` or
+/// `504c`). The model keeps only TBTT 0's, whose bits the blobs set as:
+/// - Bit 26 turns TBTT 0 on (`tsf_hal_set_tbtt_enable`, `hal_enable_sta_tbtt`).
+/// - Bit 29 lets it wake the SoC (`tsf_hal_set_tbtt_soc_wakeup_enable`, `hal_set_sta_tsf_wakeup`).
+///   The model has no light sleep for it to wake the SoC from, so the bit does nothing.
+/// - Bits 27, 28 and 31 turn TSF timer 0 on (`hal_enable_sta_tsf`, `tsf_hal_set_tsf_enable`,
+///   `hal_mac_tsf_reset`). Every timer counts whatever they say, a guess.
+///
+/// No function sets bits 0 to 25 or bit 30 of this word, and a store that does is refused by
+/// name, `tbtt_control`.
+const TBTT_CONTROL: u32 = 0x6003_5028;
+const TBTT_ON: u32 = 1 << 26;
+const TBTT_CONTROL_BITS: u32 = 0xbc00_0000;
+/// TBTT 0's timing: bits 0 to 15 the beacon interval in TU, and bits 16 to 31 how many
+/// microseconds before the TBTT the interrupt comes, as `hal_set_sta_tbtt`,
+/// `hal_set_sta_tbtt_interval`, `hal_set_sta_tbtt_ahead_time`, `tsf_hal_set_tbtt_interval` and
+/// `tsf_hal_set_tbtt_early_time` write them.
+const TBTT_TIMING: u32 = 0x6003_5030;
+/// A time unit, 1024 microseconds (IEEE 802.11-2020, 3.1).
+const TU: u64 = 1024;
+
+/// The station's beacon filter, which `hal_enable_sta_beacon_filter` turns on by setting bits 0
+/// to 2, with event bit 15 in [`EVENTS_ENABLE`], and `hal_disable_sta_beacon_filter` off. The
+/// filter, which by `hal_beacon_ie_crc_get` and `hal_beacon_ie_crc_set` compares a CRC of each
+/// beacon's elements, is not modelled: a store that turns it on is refused by name,
+/// `beacon_filter`.
+const BEACON_FILTER: u32 = 0x6003_30a0;
+const BEACON_FILTER_ON: u32 = 0x7;
+
+/// The key table: [`KEY_ENTRIES`] entries of [`KEY_WORDS`] words from [`KEYS`], as
+/// `hal_crypto_set_key_entry` writes entry `n` at `KEYS + 40 n` and `hal_crypto_clr_key_entry`
+/// clears it, and the kept word `0x6003_3814`, whose bit `n` those two set and clear and
+/// `hal_crypto_is_key_valid` reads. `wDev_remove_KeyEntry_all_cnx` walks entries 0 to 24 and
+/// `hal_crypto_init` ORs 25 into `0x6003_3840`. The words are plain storage that read the last
+/// write, 0 before it, a guess. As `hal_crypto_set_key_entry` and `hal_crypto_get_key_entry`
+/// lay them out, word 0 holds bytes 0 to 3 of the peer's MAC, word 1 bytes 4 and 5 in bits 0 to
+/// 15, the cipher in bits 18 to 20, the interface in bits 24 and 25 and the key ID in bits 30
+/// and 31, and words 2 to 9 the key. The MAC does not yet encrypt or decrypt with them: a frame
+/// that would need it is refused by name, `tx_protected` or `rx_protected`.
+const KEYS: u32 = 0x6003_4400;
+const KEY_ENTRIES: usize = 25;
+const KEY_WORDS: usize = 10;
+
+/// The key table's word at `addr`, by its index in [`Radio::keys`].
+fn key_slot(addr: u32) -> Option<usize> {
+    let at = addr.checked_sub(KEYS)? as usize / 4;
+    (addr.is_multiple_of(4) && at < KEY_ENTRIES * KEY_WORDS).then_some(at)
+}
+
+/// The microseconds from the chip's start to `now`, the unit IEEE 802.11-2020 counts the TSF in
+/// (11.1.3.1). Every TSF timer counts it until a load: the origin, and that the four timers
+/// agree, are guesses. `rx_ctrl`'s `timestamp`, which IDF gives in microseconds, is its low 32
+/// bits, whatever the loads, a guess.
 fn tsf(now: Tick) -> u64 {
     now.0 / (TICK_HZ / 1_000_000)
 }
@@ -496,6 +625,15 @@ pub(crate) struct Radio {
     rx_at: Option<Tick>,
     /// The TSF the last latch copied, which [`TSF_LOW`] and [`TSF_HIGH`] read.
     tsf_latched: u64,
+    /// What each TSF timer adds to [`tsf`], from its last load.
+    tsf_offset: [u64; TSF_TIMERS],
+    /// Each TBTT's start, from its last latch.
+    tbtt_start: [u32; TSF_TIMERS],
+    /// The key table's words.
+    keys: [u32; KEY_ENTRIES * KEY_WORDS],
+    /// While TBTT 0 would raise the power interrupt, when its settings last changed: the store
+    /// that armed it, or a later one that latched its start, set its timing or loaded timer 0.
+    tbtt_since: Option<Tick>,
 }
 
 /// A frame the radio hears on the channel it is tuned to.
@@ -572,6 +710,10 @@ impl Radio {
             rx_last: 0,
             rx_at: None,
             tsf_latched: 0,
+            tsf_offset: [0; TSF_TIMERS],
+            tbtt_start: [0; TSF_TIMERS],
+            keys: [0; KEY_ENTRIES * KEY_WORDS],
+            tbtt_since: None,
         }
     }
 
@@ -591,6 +733,9 @@ impl Radio {
 
     /// The word at `addr`, a multiple of 4, at `now`, when the radio keeps it.
     pub(crate) fn read(&mut self, now: Tick, addr: u32) -> Option<u32> {
+        if let Some(at) = key_slot(addr) {
+            return Some(self.keys[at]);
+        }
         let word = self.words[Self::slot(addr)?];
         self.settle(now);
         if let Some(queue) = Self::queue(addr, TX_STATUS, STRIDE) {
@@ -612,6 +757,7 @@ impl Radio {
             RX_RELOAD => word & !RX_RELOAD_START,
             RX_NEXT => self.rx_next & RX_ADDRESS,
             RX_LAST => self.rx_last & RX_ADDRESS,
+            MAC_CLOCK => tsf(now) as u32,
             TSF_LOW => self.tsf_latched as u32,
             TSF_HIGH => (self.tsf_latched >> 32) as u32,
             _ => word | status | done,
@@ -627,6 +773,10 @@ impl Radio {
         value: u32,
         byte: impl Fn(u32) -> Option<u8>,
     ) -> Store {
+        if let Some(at) = key_slot(addr) {
+            self.keys[at] = value;
+            return Store::Kept;
+        }
         let Some(slot) = Self::slot(addr) else {
             return Store::Unkept;
         };
@@ -641,10 +791,46 @@ impl Radio {
             RX_RELOAD if value & RX_RELOAD_START != 0 && self.rx_next == 0 && self.rx_last != 0 => {
                 self.rx_next = read_word(self.rx_last + 8, &byte).unwrap_or(0);
             }
-            TSF_CONTROL if value & !kept & TSF_LOAD != 0 => return Store::Refused("tsf_load"),
-            TSF_CONTROL if value & !kept & TSF_LATCH != 0 => self.tsf_latched = tsf(now),
+            BEACON_FILTER if value & BEACON_FILTER_ON != 0 => {
+                return Store::Refused("beacon_filter");
+            }
+            _ if coex_timer(addr) && starts(COEX_TIMER_ON) => return Store::Refused("coex_timer"),
+            PWR_ENABLE if value & !PWR_BITS != 0 => return Store::Refused("pwr_intr"),
+            PWR_ENABLE if value & PWR_TBTT_OTHERS != 0 => return Store::Refused("tbtt_intr"),
+            PWR_ENABLE if value & PWR_TSF_TIMERS != 0 => return Store::Refused("tsf_timer"),
+            TBTT_CONTROL if value & !TBTT_CONTROL_BITS != 0 => {
+                return Store::Refused("tbtt_control");
+            }
+            TBTT if value & !TBTT_FIELD != 0 => return Store::Refused("tbtt_start"),
+            TSF_CONTROL if value & !TSF_CONTROL_BITS != 0 => return Store::Refused("tsf_control"),
+            TSF_CONTROL => {
+                let loaded = (u64::from(self.word(TSF_LOAD_HIGH)) << 32)
+                    | u64::from(self.word(TSF_LOAD_LOW));
+                for n in 0..TSF_TIMERS {
+                    if value & 1 << (TSF_LOAD_SHIFT + n as u32) != 0 {
+                        self.tsf_offset[n] = loaded.wrapping_sub(tsf(now));
+                    }
+                    if value & 1 << (TBTT_LATCH_SHIFT + n as u32) != 0 {
+                        self.tbtt_start[n] = self.word(TBTT);
+                    }
+                }
+                self.words[slot] = value & TSF_LATCH;
+                let latched = value & !kept & TSF_LATCH;
+                if latched != 0 {
+                    self.tsf_latched = self.timer(now, latched.trailing_zeros() as usize);
+                }
+            }
             _ => {}
         }
+        // TBTT 0's settings: its start, its timing and timer 0.
+        let retimed = addr == TBTT_TIMING
+            || addr == TSF_CONTROL && value & (1 << TSF_LOAD_SHIFT | 1 << TBTT_LATCH_SHIFT) != 0;
+        let on = self.word(TBTT_CONTROL) & TBTT_ON != 0 && self.word(PWR_ENABLE) & PWR_TBTT != 0;
+        self.tbtt_since = match self.tbtt_since {
+            _ if !on => None,
+            Some(since) if !retimed => Some(since),
+            _ => Some(now),
+        };
         match Self::queue(addr, PLCP0, 8) {
             Some(queue) if starts(PLCP0_START) => match self.send(now, queue, value, byte) {
                 Ok(()) => Store::Sent,
@@ -675,6 +861,11 @@ impl Radio {
             return Err("tx_length");
         }
         let mpdu: Arc<[u8]> = Arc::from(&psdu[..length - FCS]);
+        // The Protected Frame bit (9.2.4.1.9): the MAC would encrypt the frame with the key
+        // table's entry, which the model does not run.
+        if mpdu[1] & PROTECTED != 0 {
+            return Err("tx_protected");
+        }
         // Address 1's Individual/Group bit (9.2.4.3.1). A group-addressed frame is not
         // acknowledged (10.3.2.11).
         let waits = mpdu[4] & 1 == 0;
@@ -699,6 +890,37 @@ impl Radio {
             acked: false,
         });
         Ok(())
+    }
+
+    /// When the TBTT the driver armed would first raise the power interrupt: the first TBTT at
+    /// least the ahead time after the store that armed it or last changed its settings, less
+    /// that time. The TBTTs are the counts of TSF timer 0 that agree with TBTT 0's latched start
+    /// modulo the beacon interval, as a TBTT falls where the TSF is a whole number of beacon
+    /// intervals (IEEE 802.11-2020, 11.1.3.2). That the MAC compares timer 0 this way, raises
+    /// the interrupt the ahead time before, and after a change of the settings waits for the
+    /// next such count, is a guess. `None` while the driver has not armed it.
+    pub(crate) fn tbtt(&self) -> Option<Tick> {
+        let armed = self.tbtt_since?;
+        let timing = self.word(TBTT_TIMING);
+        let interval = u64::from(timing & 0xffff) * TU;
+        let ahead = u64::from(timing >> 16);
+        let period = if interval == 0 {
+            u64::from(TBTT_FIELD) + 1
+        } else {
+            interval
+        };
+        let offset = self.tsf_offset[0];
+        let first = self.timer(armed, 0).wrapping_add(ahead);
+        let target = u64::from(self.tbtt_start[0]) % period;
+        let tbtt = first.wrapping_add((target + period - first % period) % period);
+        let us = tbtt.wrapping_sub(ahead).wrapping_sub(offset);
+        Some(Tick(us.saturating_mul(TICK_HZ / 1_000_000)).max(armed))
+    }
+
+    /// TSF timer `n`'s count at `now`.
+    fn timer(&self, now: Tick, n: usize) -> u64 {
+        let offset = self.tsf_offset.get(n).copied().unwrap_or(0);
+        tsf(now).wrapping_add(offset)
     }
 
     /// The end of the frame on the air, which the run has not reported.
@@ -747,6 +969,11 @@ impl Radio {
         let (slots, ack) = self.filter(frame.mpdu);
         if slots == 0 {
             return Received::Missed;
+        }
+        // The MAC would decrypt the frame with the key table's entry, which the model does not
+        // run.
+        if frame.mpdu[1] & PROTECTED != 0 {
+            return Received::Refused("rx_protected");
         }
         // A descriptor is free while the CPU has handed it to the MAC: bit 31 of its first word,
         // which `wDev_AppendRxBlocks` sets and the MAC clears, a guess.
@@ -980,6 +1207,9 @@ fn rx_rate(rate: Rate) -> Option<RxRate> {
         mcs: 0,
     })
 }
+
+/// The Protected Frame bit of Frame Control's second octet (IEEE 802.11-2020, 9.2.4.1.9).
+const PROTECTED: u8 = 0x40;
 
 /// The FCS after the MPDU.
 const FCS: usize = 4;
@@ -1563,9 +1793,10 @@ mod tests {
         );
     }
 
-    /// A latch bit copies the TSF, in microseconds, into the two words, and a load is refused.
+    /// A latch bit copies the TSF, in microseconds, into the two words, and a load sets timer 0
+    /// or 1 to count on from the loaded count.
     #[test]
-    fn a_latch_reads_the_tsf_and_a_load_is_refused() {
+    fn a_latch_reads_the_tsf_and_a_load_sets_it() {
         let mut radio = Radio::new();
         let now = Tick(480 * ((5 << 32) + 7));
         // `hal_get_tsf_time(0)`: set bit 0, read the two words, clear bit 0.
@@ -1573,9 +1804,318 @@ mod tests {
         assert_eq!(radio.read(Tick(now.0 + 480), TSF_LOW), Some(7));
         assert_eq!(radio.read(now, TSF_HIGH), Some(5));
         assert_eq!(radio.write(now, TSF_CONTROL, 0, |_| None), Store::Kept);
+
+        // `hal_set_sta_tsf`: the AP's count, then bit 4, which reads 0 at once.
+        assert!(write(&mut radio, TSF_LOAD_LOW, 0x8000_0000));
+        assert!(write(&mut radio, TSF_LOAD_HIGH, 9));
+        assert_eq!(radio.write(now, TSF_CONTROL, 1 << 4, |_| None), Store::Kept);
+        assert_eq!(radio.read(now, TSF_CONTROL), Some(0));
+        // 3 us later timer 0 reads the loaded count and 3, and timer 2 the chip's own.
+        let later = Tick(now.0 + 3 * 480);
+        assert_eq!(radio.write(later, TSF_CONTROL, 1, |_| None), Store::Kept);
+        assert_eq!(radio.read(later, TSF_LOW), Some(0x8000_0003));
+        assert_eq!(radio.read(later, TSF_HIGH), Some(9));
         assert_eq!(
-            radio.write(now, TSF_CONTROL, 1 << 5, |_| None),
-            Store::Refused("tsf_load")
+            radio.write(later, TSF_CONTROL, 1 << 2, |_| None),
+            Store::Kept
         );
+        assert_eq!(radio.read(later, TSF_LOW), Some(10));
+        assert_eq!(radio.read(later, TSF_HIGH), Some(5));
+        // `hal_mac_tsf_reset`: 0 into timers 0 and 1.
+        assert!(write(&mut radio, TSF_LOAD_LOW, 0));
+        assert!(write(&mut radio, TSF_LOAD_HIGH, 0));
+        assert_eq!(radio.write(later, TSF_CONTROL, 0x30, |_| None), Store::Kept);
+        assert_eq!(radio.write(later, TSF_CONTROL, 2, |_| None), Store::Kept);
+        assert_eq!(radio.read(Tick(later.0 + 480), TSF_LOW), Some(0));
+        assert_eq!(radio.read(later, TSF_HIGH), Some(0));
+    }
+
+    /// `tsf_hal_set_counter_value` loads timer `n` with bit `4 + n`, timers 2 and 3 too, and
+    /// each counts on from its own load.
+    #[test]
+    fn a_load_sets_each_of_the_four_timers() {
+        let mut radio = Radio::new();
+        let now = Tick(480 * 1_000);
+        for n in 0..4 {
+            assert!(write(&mut radio, TSF_LOAD_LOW, 100 * (n + 1)));
+            assert!(write(&mut radio, TSF_LOAD_HIGH, n));
+            assert_eq!(
+                radio.write(now, TSF_CONTROL, 1 << (4 + n), |_| None),
+                Store::Kept
+            );
+            assert_eq!(radio.read(now, TSF_CONTROL), Some(0));
+        }
+        let later = Tick(now.0 + 5 * 480);
+        for n in 0..4 {
+            assert_eq!(
+                radio.write(later, TSF_CONTROL, 1 << n, |_| None),
+                Store::Kept
+            );
+            assert_eq!(
+                radio.read(later, TSF_LOW),
+                Some(100 * (n + 1) + 5),
+                "timer {n}"
+            );
+            assert_eq!(radio.read(later, TSF_HIGH), Some(n), "timer {n}");
+            assert_eq!(radio.write(later, TSF_CONTROL, 0, |_| None), Store::Kept);
+        }
+    }
+
+    /// Every bit of the TSF control word, TBTT 0's control word, the TBTT start and the power
+    /// interrupt's enable word that a blob function sets is kept, and each other bit is refused
+    /// by name. So is the interrupt of TBTTs 1 to 3 and of the TSF timers' alarms.
+    #[test]
+    fn a_tsf_or_tbtt_bit_no_blob_function_sets_is_refused() {
+        let kept = [
+            (TSF_CONTROL, 0xfff),
+            (TBTT_CONTROL, 0xbc00_0000),
+            (TBTT, 0x03ff_ffff),
+            (PWR_ENABLE, PWR_TBTT),
+        ];
+        for (at, bits) in kept {
+            let mut radio = Radio::new();
+            assert_eq!(
+                radio.write(Tick(0), at, bits, |_| None),
+                Store::Kept,
+                "{at:x}"
+            );
+        }
+        let refused = [
+            (TSF_CONTROL, 1 << 12, "tsf_control"),
+            (TSF_CONTROL, 1 << 31, "tsf_control"),
+            (TBTT_CONTROL, 1, "tbtt_control"),
+            (TBTT_CONTROL, 1 << 25, "tbtt_control"),
+            (TBTT_CONTROL, 1 << 30, "tbtt_control"),
+            (TBTT, 1 << 26, "tbtt_start"),
+            (PWR_ENABLE, 1, "pwr_intr"),
+            (PWR_ENABLE, 1 << 9, "pwr_intr"),
+            (PWR_ENABLE, 1 << 3, "tbtt_intr"),
+            (PWR_ENABLE, 1 << 2, "tbtt_intr"),
+            (PWR_ENABLE, 1 << 1, "tbtt_intr"),
+            (PWR_ENABLE, 1 << 8, "tsf_timer"),
+            (PWR_ENABLE, 1 << 5, "tsf_timer"),
+        ];
+        for (at, bits, name) in refused {
+            let mut radio = Radio::new();
+            assert_eq!(
+                radio.write(Tick(0), at, bits, |_| None),
+                Store::Refused(name),
+                "{at:x} {bits:x}"
+            );
+        }
+    }
+
+    /// The key table holds 25 entries of 10 words from `0x6003_4400`, each reading what was
+    /// written, and its valid bits beside the other kept words. `hal_crypto_clr_key_entry`
+    /// writes 0 over an entry's ten words.
+    #[test]
+    fn the_key_table_is_storage() {
+        let mut radio = Radio::new();
+        assert!(Radio::slot(0x6003_3814).is_some(), "the valid bits");
+        let last = KEYS + 4 * (KEY_ENTRIES * KEY_WORDS - 1) as u32;
+        for addr in [KEYS, last] {
+            assert!(blocks::name(addr).starts_with("RADIO"), "{addr:#x}");
+        }
+        for entry in [0, 24] {
+            let at = KEYS + 40 * entry;
+            for k in 0..KEY_WORDS as u32 {
+                assert_eq!(read(&mut radio, at + 4 * k), Some(0));
+                assert!(write(&mut radio, at + 4 * k, 0x1000 * entry + k));
+            }
+            assert_eq!(read(&mut radio, at + 4), Some(0x1000 * entry + 1));
+            for k in 0..KEY_WORDS as u32 {
+                assert!(write(&mut radio, at + 4 * k, 0));
+                assert_eq!(read(&mut radio, at + 4 * k), Some(0));
+            }
+        }
+        assert_eq!(read(&mut radio, KEYS + 40 * 25), None);
+        assert_eq!(read(&mut radio, KEYS - 4), None);
+    }
+
+    /// After the join the driver leaves slot 0's receiver address on the station and puts its
+    /// BSSID on the access point's, with these words. The access point's Beacons and its frames
+    /// to every station land, unacknowledged, and its frames to the station land and are
+    /// acknowledged. Another network's Beacon does not land. `hal_set_sta_beacon_filter` later
+    /// sets bit 16 of the BSSID's second word, which the filter does not read.
+    #[test]
+    fn after_the_join_the_access_points_frames_land_and_another_networks_do_not() {
+        for high in [0x165, 0x1_0165] {
+            let mut ram = Ram::default();
+            let mut radio = listening(&mut ram);
+            for (at, value) in [
+                (RA, 0x2),
+                (RA + 4, 0x100),
+                (RA_MASK, !0),
+                (RA_MASK + 4, 0x1_ffff),
+                (BSSID, 0x6272_6f02),
+                (BSSID + 4, high),
+                (BSSID_MASK, !0),
+                (BSSID_MASK + 4, 0x1_ffff),
+            ] {
+                assert!(write(&mut radio, at, value));
+            }
+            let mut land = |mpdu: &[u8]| {
+                ram.descriptor(RX0, BUF0, SIZE, RX1);
+                assert!(write(&mut radio, RX_BASE, RX0));
+                let map = ram.0.clone();
+                match radio.hear(Tick(0), heard(mpdu), |at| map.get(&at).copied()) {
+                    Received::Kept { ack, .. } => Some(ack),
+                    Received::Missed => None,
+                    refused => panic!("{refused:?}"),
+                }
+            };
+            assert_eq!(land(&management(8, [0xff; 6])), Some(false), "{high:#x}");
+            // A Data frame from the DS: Address 1 the receiver, Address 2 the BSSID.
+            let data = |ra: [u8; 6]| {
+                let mut mpdu = vec![0x08, 0x02, 0, 0];
+                mpdu.extend(ra);
+                mpdu.extend(AP);
+                mpdu.extend([0x02, 0, 0, 0, 0, 0x09, 0x10, 0x00, 0xaa, 0xaa]);
+                mpdu
+            };
+            assert_eq!(land(&data(STA)), Some(true));
+            assert_eq!(land(&data([0xff; 6])), Some(false));
+            let mut other = management(8, [0xff; 6]);
+            other[10..22].copy_from_slice(&[0x02, 0, 0, 0, 0, 0x07, 0x02, 0, 0, 0, 0, 0x07]);
+            assert_eq!(land(&other), None);
+        }
+    }
+
+    /// The MAC's clock reads the microseconds the `rx_ctrl` timestamp counts.
+    #[test]
+    fn the_mac_clock_counts_microseconds() {
+        let mut radio = Radio::new();
+        assert_eq!(
+            radio.read(Tick(480 * 3_207_712 + 479), MAC_CLOCK),
+            Some(3_207_712)
+        );
+        assert_eq!(radio.read(Tick(480 << 32), MAC_CLOCK), Some(0));
+    }
+
+    /// A frame the MAC would encrypt or decrypt with the key table is refused by name.
+    #[test]
+    fn a_protected_frame_is_refused_by_name() {
+        let mut protected = PROBE;
+        protected[4..10].copy_from_slice(&AP);
+        protected[1] = PROTECTED;
+        let mut radio = ready(0x31);
+        assert_eq!(
+            start(&mut radio, Tick(0), &protected, 49),
+            Store::Refused("tx_protected")
+        );
+
+        let mut ram = Ram::default();
+        let mut radio = listening(&mut ram);
+        let mut mpdu = management(5, STA);
+        mpdu[1] = PROTECTED;
+        let map = ram.0.clone();
+        assert_eq!(
+            radio.hear(Tick(0), heard(&mpdu), |at| map.get(&at).copied()),
+            Received::Refused("rx_protected")
+        );
+        // One no slot takes is dropped as before.
+        mpdu[4..10].copy_from_slice(&[0x02, 0, 0, 0, 0, 0x02]);
+        assert_eq!(
+            radio.hear(Tick(0), heard(&mpdu), |at| map.get(&at).copied()),
+            Received::Missed
+        );
+    }
+
+    /// Turning on a coexistence timer or the beacon filter is refused by name. Turning either
+    /// off, as the stock station does, is kept.
+    #[test]
+    fn a_coexistence_timer_or_the_beacon_filter_turned_on_is_refused() {
+        let mut radio = Radio::new();
+        for timer in [COEX_TIMERS, COEX_TIMERS + 16, COEX_TIMERS + 24] {
+            assert_eq!(radio.write(Tick(0), timer, 0, |_| None), Store::Kept);
+            assert_eq!(
+                radio.write(Tick(0), timer, COEX_TIMER_ON, |_| None),
+                Store::Refused("coex_timer")
+            );
+        }
+        assert_eq!(
+            radio.write(Tick(0), BEACON_FILTER, 0, |_| None),
+            Store::Kept
+        );
+        assert_eq!(
+            radio.write(Tick(0), BEACON_FILTER, 7, |_| None),
+            Store::Refused("beacon_filter")
+        );
+    }
+
+    /// The stock station's stores, in its order: timer 0 loaded with the access point's TSF
+    /// 528 us behind the chip's, the TBTT's interrupt and then TBTT 0 turned on at 3.2077 s,
+    /// as `hal_enable_sta_tbtt` does, and `hal_set_sta_tbtt`'s interval of 100 TU, start at
+    /// 3 072 000 us and its latch, and ahead time of 3000 us. Its first TBTT after those is at
+    /// 3 276 800 us of timer 0, so its interrupt would come at 3 273 800 us, 3 274 328 us of the
+    /// chip's time. Turned off either way, none is due.
+    #[test]
+    fn the_first_armed_tbtt_falls_on_a_whole_beacon_interval() {
+        let at = |us: u64| Tick(480 * us);
+        let store = |radio: &mut Radio, now: Tick, addr: u32, value: u32| {
+            assert_eq!(radio.write(now, addr, value, |_| None), Store::Kept);
+        };
+        let stock = || {
+            let mut radio = Radio::new();
+            assert!(write(&mut radio, TSF_LOAD_LOW, 0x30_8a21));
+            store(&mut radio, at(3_181_617), TSF_CONTROL, 1 << 4);
+            store(&mut radio, at(3_207_710), TBTT_CONTROL, 0xb800_0000);
+            store(&mut radio, at(3_207_712), PWR_ENABLE, PWR_TBTT);
+            assert_eq!(radio.tbtt(), None, "TBTT 0 is off");
+            store(&mut radio, at(3_207_712), TBTT_CONTROL, 0xbc00_0000);
+            assert!(radio.tbtt().is_some(), "armed");
+            let set = at(3_207_713);
+            store(&mut radio, set, TBTT_TIMING, 0x64);
+            store(&mut radio, set, TBTT, 0x2e_e000);
+            store(&mut radio, set, TSF_CONTROL, 1 << 8);
+            assert_eq!(radio.read(set, TSF_CONTROL), Some(0));
+            store(&mut radio, set, TBTT_TIMING, 0x0bb8_0064);
+            radio
+        };
+        let mut radio = stock();
+        assert_eq!(radio.tbtt(), Some(at(3_274_328)));
+        // A store to the start that no latch follows moves nothing.
+        store(&mut radio, at(3_207_714), TBTT, 0x2e_e000 + 512);
+        assert_eq!(radio.tbtt(), Some(at(3_274_328)));
+        // A later store that keeps bit 4 set keeps the arming.
+        store(&mut radio, at(3_207_800), PWR_ENABLE, PWR_TBTT);
+        assert_eq!(radio.tbtt(), Some(at(3_274_328)));
+        store(&mut radio, at(3_207_900), PWR_ENABLE, 0);
+        assert_eq!(radio.tbtt(), None);
+        // `hal_disable_sta_tbtt` clears TBTT 0's bit first.
+        let mut radio = stock();
+        store(&mut radio, at(3_207_900), TBTT_CONTROL, 0xb800_0000);
+        assert_eq!(radio.tbtt(), None);
+    }
+
+    /// A TBTT's settings that change after it is armed count from the change: a start latched
+    /// after its first interrupt since the arming would have come brings the interrupt at the
+    /// next TBTT, not at once, and so does a load of timer 0.
+    #[test]
+    fn a_tbtt_set_after_its_arming_counts_from_the_store_that_set_it() {
+        let mut radio = Radio::new();
+        let at = |us: u64| Tick(480 * us);
+        assert!(write(&mut radio, TBTT_TIMING, 10 << 16 | 1));
+        assert!(write(&mut radio, TBTT_CONTROL, TBTT_ON));
+        assert_eq!(
+            radio.write(at(0), PWR_ENABLE, PWR_TBTT, |_| None),
+            Store::Kept
+        );
+        assert_eq!(radio.tbtt(), Some(at(1014)));
+        // At 1000 us a start 500 us into each TU is latched: its 500 us has passed, so the
+        // first is at 1524 us.
+        assert!(write(&mut radio, TBTT, 500));
+        assert_eq!(
+            radio.write(at(1000), TSF_CONTROL, 1 << 8, |_| None),
+            Store::Kept
+        );
+        assert_eq!(radio.tbtt(), Some(at(1514)));
+        // A load of timer 0 to 0 at 1100 us puts the next TBTT at its 500 us.
+        assert!(write(&mut radio, TSF_LOAD_LOW, 0));
+        assert_eq!(
+            radio.write(at(1100), TSF_CONTROL, 1 << 4, |_| None),
+            Store::Kept
+        );
+        assert_eq!(radio.tbtt(), Some(at(1590)));
     }
 }

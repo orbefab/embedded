@@ -796,6 +796,11 @@ mod tests {
     /// A bridge on `gpios` that runs `stores`, each an `l32r` of its address and value and an
     /// `s32i`, then spins.
     fn bridge(gpios: &[u8], stores: &[(u32, u32)]) -> Bridge {
+        Bridge::new(chip(gpios, stores), gpios.to_vec(), [])
+    }
+
+    /// The chip of [`bridge`].
+    fn chip(gpios: &[u8], stores: &[(u32, u32)]) -> Esp32s3 {
         const BASE: u32 = 0x4037_0000;
         let mut image: Vec<u8> = stores
             .iter()
@@ -812,8 +817,67 @@ mod tests {
             image.extend([0x32, 0x62, 0x00]);
         }
         image.extend([0x06, 0xff, 0xff]);
-        let chip = Esp32s3::new(gpios, entry, [(BASE, image.as_slice())], None);
-        Bridge::new(chip, gpios.to_vec(), [])
+        Esp32s3::new(gpios, entry, [(BASE, image.as_slice())], None)
+    }
+
+    /// A bridge with its radio that sets a TBTT every TU with no ahead time at TSF 0 and
+    /// latches it, then enables TBTT 0 and its interrupt with the fifth store, at 350,000 ps,
+    /// where TSF 0 makes that TBTT fall due.
+    fn tbtt_bridge() -> Bridge {
+        let mut chip = chip(
+            &[],
+            &[
+                (0x6003_5030, 1),
+                (0x6003_5020, 0),
+                (0x6003_500c, 1 << 8),
+                (0x6003_5028, 1 << 26),
+                (0x6003_5110, 1 << 4),
+            ],
+        );
+        chip.use_radio();
+        Bridge::new(chip, Vec::new(), [])
+    }
+
+    /// Each stop of a [`tbtt_bridge`] run to 1 us, stepped through `split` first, and the fault
+    /// the bridge holds after it. Each comes from the first call whose limit reaches it.
+    fn tbtt_stops(split: Option<Time>) -> Vec<(Time, Option<(Time, Fault)>)> {
+        let mut core = tbtt_bridge();
+        let mut seen = Vec::new();
+        let mut served = None;
+        for limit in split.into_iter().chain([Time::from_ps(1_000_000)]) {
+            while let Some(stop) = core.run_until(limit) {
+                assert!(
+                    served.is_none_or(|served| stop.at > served),
+                    "{stop:?} after a call to {served:?} returned"
+                );
+                seen.push((stop.at, core.fault));
+            }
+            served = Some(limit);
+        }
+        seen
+    }
+
+    /// The TBTT due at the store that armed it stops the run at that store's time, through
+    /// whichever call first reaches it, however the run splits around it.
+    #[test]
+    fn a_tbtt_due_at_its_arming_store_stops_there_however_the_run_splits() {
+        let straight = tbtt_stops(None);
+        let at = Time::from_ps(350_000);
+        let [(stop, Some((fault_at, Fault::Refused(refused, _))))] = straight[..] else {
+            panic!("{straight:?}");
+        };
+        assert_eq!(
+            (stop, fault_at, refused),
+            (at, at, Refused::Register("RADIO", "tbtt"))
+        );
+        let near = (150..200).flat_map(|t| {
+            let ps = time(Tick(t)).as_ps();
+            [ps - 1, ps, ps + 1]
+        });
+        for ps in near.chain([300_000, 360_000, 400_000]) {
+            let split = Time::from_ps(ps);
+            assert_eq!(tbtt_stops(Some(split)), straight, "split at {ps} ps");
+        }
     }
 
     /// An input at a landing the copy has served refuses a pulse at that landing's tick. The
