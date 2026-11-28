@@ -24,6 +24,7 @@ import os
 import platform
 import re
 import shutil
+import signal
 import socket
 import struct
 import subprocess
@@ -76,6 +77,9 @@ FLASH_SIZE_NIBBLE_TO_MB: dict[int, int] = {0: 1, 1: 2, 2: 4, 3: 8, 4: 16}
 FLASH_MB_TO_NIBBLE: dict[int, int] = {mb: nib for nib, mb in FLASH_SIZE_NIBBLE_TO_MB.items()}
 
 PERIODIC_TOLERANCE = 0.25
+DEFAULT_ORBE_TIMEOUT_S = 15.0
+QEMU_CONNECT_TIMEOUT_S = 5.0
+STDERR_TAIL_LINES = 20
 
 # Fatal patterns that indicate a crash, panic, abort, watchdog reset, or unexpected reboot.
 FATAL_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
@@ -93,8 +97,55 @@ FATAL_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 IDF_TS_RE = re.compile(r"^([IWEVD]) \(\d+\) ")
 CHIP_REV_LINE_RE = re.compile(r"^[IWEVD] \(<T>\) efuse_init: Chip rev:")
 FLASH_CHIP_LINE_RE = re.compile(r"^[IWEVD] \(<T>\) spi_flash: detected chip:")
-SILICON_REV_RE = re.compile(r"\bsilicon revision v\d+\.\d+\b")
+SILICON_REV_RE = re.compile(
+    r"^(This is esp32s3 chip with \d+ CPU core\(s\), [^,]+, silicon revision )v\d+\.\d+"
+    r"(, \d+MB (?:embedded|external) flash)$"
+)
 BOOT_RTCINIT_RE = re.compile(r"^W \(\d+\) rtcinit: o_code calibration fail$")
+
+
+class OrbeTimeoutError(RuntimeError):
+    """Raised when orbe-run exceeds its wall-clock timeout."""
+
+    def __init__(self, timeout_s: float, stderr: str = "") -> None:
+        self.timeout_s = timeout_s
+        self.stderr = stderr
+        msg = f"orbe-run timed out after {timeout_s:g} s"
+        tail = _stderr_tail(stderr)
+        if tail:
+            msg += f"\nstderr:\n{tail}"
+        super().__init__(msg)
+
+
+def _stderr_tail(text: str, max_lines: int = STDERR_TAIL_LINES) -> str:
+    lines = text.strip().splitlines()
+    if not lines:
+        return ""
+    if len(lines) > max_lines:
+        return "\n".join(["...", *lines[-max_lines:]])
+    return "\n".join(lines)
+
+
+def _terminate_process_group(proc: subprocess.Popen[bytes] | subprocess.Popen[str]) -> None:
+    if proc.poll() is not None:
+        return
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    try:
+        proc.wait(timeout=0.5)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+    try:
+        proc.wait(timeout=2.0)
+    except subprocess.TimeoutExpired:
+        pass
 
 
 @dataclasses.dataclass(frozen=True)
@@ -114,6 +165,7 @@ class AppSpec:
     orbe_stop_ms: int
     qemu_timeout_s: float
     qemu_quiet_s: float = 0.5
+    orbe_timeout_s: float = DEFAULT_ORBE_TIMEOUT_S
     periodic: PeriodicSpec | None = None
     extra_pins: tuple[tuple[str, str], ...] = ()
     note: str = ""
@@ -157,6 +209,7 @@ APPS: tuple[AppSpec, ...] = (
         orbe_usart="UART0",
         orbe_stop_ms=600,
         qemu_timeout_s=5.0,
+        orbe_timeout_s=60.0,
     ),
     AppSpec(
         name="esp32s3-stock-eeprom",
@@ -176,6 +229,7 @@ APPS: tuple[AppSpec, ...] = (
         orbe_stop_ms=1000,
         qemu_timeout_s=10.0,
         qemu_quiet_s=1.2,
+        orbe_timeout_s=30.0,
     ),
     AppSpec(
         name="esp32s3-stock-preferences",
@@ -209,6 +263,7 @@ APPS: tuple[AppSpec, ...] = (
         orbe_usart="UART0",
         orbe_stop_ms=300,
         qemu_timeout_s=4.0,
+        orbe_timeout_s=30.0,
         note="serial only; QEMU does not model LEDC electrical output",
     ),
     AppSpec(
@@ -259,6 +314,7 @@ APPS: tuple[AppSpec, ...] = (
         orbe_usart="UART0",
         orbe_stop_ms=300,
         qemu_timeout_s=4.0,
+        orbe_timeout_s=20.0,
         note="boot serial only; QEMU does not model PCNT pulse inputs",
     ),
     AppSpec(
@@ -691,90 +747,123 @@ def run_qemu(
 
     with tempfile.TemporaryDirectory(prefix="orbe-qemu-run-") as td:
         sock_path = Path(td) / "serial.sock"
-        srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        srv.bind(str(sock_path))
-        srv.listen(1)
-        srv.settimeout(5.0)
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as srv:
+            srv.bind(str(sock_path))
+            srv.listen(1)
+            srv.settimeout(0.05)
 
-        cmd = [
-            str(qemu_bin),
-            "-nographic",
-            "-display",
-            "none",
-            "-machine",
-            "esp32s3",
-            "-drive",
-            f"file={flash_img},if=mtd,format=raw",
-            "-nic",
-            "none",
-            "-monitor",
-            "none",
-            "-serial",
-            f"unix:{sock_path}",
-        ]
-        proc = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        lines: list[tuple[float, str]] = []
-        partial = bytearray()
-        early_rc: int | None = None
-        saw_entry = False
-        app_line_count = 0
-        periodic_count = 0
-        last_app_line_t: float | None = None
+            cmd = [
+                str(qemu_bin),
+                "-nographic",
+                "-display",
+                "none",
+                "-machine",
+                "esp32s3",
+                "-drive",
+                f"file={flash_img},if=mtd,format=raw",
+                "-nic",
+                "none",
+                "-monitor",
+                "none",
+                "-serial",
+                f"unix:{sock_path}",
+            ]
+            proc = subprocess.Popen(
+                cmd,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                start_new_session=True,
+            )
+            lines: list[tuple[float, str]] = []
+            partial = bytearray()
+            early_rc: int | None = None
+            saw_entry = False
+            app_line_count = 0
+            periodic_count = 0
+            last_app_line_t: float | None = None
+            connect_deadline = time.monotonic() + min(QEMU_CONNECT_TIMEOUT_S, app.qemu_timeout_s)
 
-        try:
-            conn, _ = srv.accept()
-            conn.settimeout(0.05)
-            start = time.monotonic()
-            while True:
-                now = time.monotonic()
-                elapsed = now - start
-                if elapsed >= app.qemu_timeout_s:
-                    break
-                if app.periodic is not None:
-                    if periodic_count >= app.periodic.min_ticks:
-                        break
-                elif app_line_count > 0 and last_app_line_t is not None and (now - last_app_line_t) >= app.qemu_quiet_s:
-                    break
-                try:
-                    chunk = conn.recv(4096)
-                    if not chunk:
-                        break
-                    t_rel = time.monotonic() - start
-                    for b in chunk:
-                        if b == 0x0A:
-                            line = partial.decode("utf-8", errors="replace").rstrip("\r")
-                            lines.append((t_rel, line))
-                            partial.clear()
-                            if line.startswith("entry 0x"):
-                                saw_entry = True
-                            elif saw_entry:
-                                if not BOOT_RTCINIT_RE.match(line) and line != "":
-                                    app_line_count += 1
-                                    last_app_line_t = time.monotonic()
-                                if app.periodic is not None and app.periodic.pattern.match(line):
-                                    periodic_count += 1
-                        else:
-                            partial.append(b)
-                except TimeoutError:
+            try:
+                conn: socket.socket | None = None
+                while conn is None:
                     rc = proc.poll()
                     if rc is not None:
                         early_rc = rc
                         break
-            if partial:
-                lines.append((time.monotonic() - start, partial.decode("utf-8", errors="replace").rstrip("\r")))
-            conn.close()
-        finally:
-            srv.close()
-            if proc.poll() is None:
-                proc.terminate()
-                try:
-                    _out, err_bytes = proc.communicate(timeout=2.0)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
+                    try:
+                        conn, _ = srv.accept()
+                    except TimeoutError:
+                        rc = proc.poll()
+                        if rc is not None:
+                            early_rc = rc
+                            break
+                        if time.monotonic() >= connect_deadline:
+                            break
+
+                if conn is not None:
+                    try:
+                        conn.settimeout(0.05)
+                        start = time.monotonic()
+                        while True:
+                            now = time.monotonic()
+                            elapsed = now - start
+                            if elapsed >= app.qemu_timeout_s:
+                                break
+                            if app.periodic is not None:
+                                if periodic_count >= app.periodic.min_ticks:
+                                    break
+                            elif (
+                                app_line_count > 0
+                                and last_app_line_t is not None
+                                and (now - last_app_line_t) >= app.qemu_quiet_s
+                            ):
+                                break
+                            try:
+                                chunk = conn.recv(4096)
+                                if not chunk:
+                                    try:
+                                        early_rc = proc.wait(timeout=0.2)
+                                    except subprocess.TimeoutExpired:
+                                        pass
+                                    break
+                                t_rel = time.monotonic() - start
+                                for b in chunk:
+                                    if b == 0x0A:
+                                        line = partial.decode("utf-8", errors="replace").rstrip("\r")
+                                        lines.append((t_rel, line))
+                                        partial.clear()
+                                        if line.startswith("entry 0x"):
+                                            saw_entry = True
+                                        elif saw_entry:
+                                            if not BOOT_RTCINIT_RE.match(line) and line != "":
+                                                app_line_count += 1
+                                                last_app_line_t = time.monotonic()
+                                            if app.periodic is not None and app.periodic.pattern.match(line):
+                                                periodic_count += 1
+                                    else:
+                                        partial.append(b)
+                            except TimeoutError:
+                                rc = proc.poll()
+                                if rc is not None:
+                                    early_rc = rc
+                                    break
+                        if partial:
+                            lines.append(
+                                (time.monotonic() - start, partial.decode("utf-8", errors="replace").rstrip("\r"))
+                            )
+                    finally:
+                        conn.close()
+            finally:
+                if proc.poll() is None:
+                    _terminate_process_group(proc)
+                    try:
+                        _out, err_bytes = proc.communicate(timeout=2.0)
+                    except subprocess.TimeoutExpired:
+                        _out, err_bytes = b"", b""
+                else:
+                    early_rc = proc.returncode
                     _out, err_bytes = proc.communicate()
-            else:
-                early_rc = proc.returncode
-                _out, err_bytes = proc.communicate()
 
     return lines, err_bytes.decode("utf-8", errors="replace"), early_rc
 
@@ -785,6 +874,8 @@ def run_orbe(
     part_path: Path,
     app_path: Path,
     app: AppSpec,
+    *,
+    orbe_timeout_s: float | None = None,
 ) -> tuple[list[tuple[float, str]], dict]:
     """Run orbe-run on a minimal ESP32-S3 netlist and return timestamped lines and the JSON report."""
     part_bytes = part_path.read_bytes()
@@ -852,7 +943,8 @@ def run_orbe(
         out_dir = tmp / "run"
         nl_path.write_text(json.dumps(netlist))
 
-        proc = subprocess.run(
+        timeout_s = app.orbe_timeout_s if orbe_timeout_s is None else orbe_timeout_s
+        proc = subprocess.Popen(
             [
                 str(orbe_run),
                 "run",
@@ -864,10 +956,25 @@ def run_orbe(
                 "--blobs",
                 str(bdir),
             ],
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
+            start_new_session=True,
         )
-        report = json.loads(proc.stdout) if proc.stdout.strip() else {"status": "error", "stderr": proc.stderr}
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout_s)
+        except subprocess.TimeoutExpired:
+            _terminate_process_group(proc)
+            try:
+                _stdout, stderr = proc.communicate(timeout=1.0)
+            except subprocess.TimeoutExpired:
+                stderr = ""
+            raise OrbeTimeoutError(timeout_s, stderr) from None
+
+        try:
+            report = json.loads(stdout) if stdout.strip() else {"status": "error", "stderr": stderr}
+        except json.JSONDecodeError:
+            report = {"status": "error", "stdout": stdout, "stderr": stderr}
         if proc.returncode != 0 or report.get("errors", 0) != 0:
             raise RuntimeError(f"orbe-run failed (rc={proc.returncode}): {json.dumps(report, indent=2)}")
 
@@ -934,7 +1041,7 @@ def normalize_lines(lines: list[tuple[float, str]], *, is_qemu: bool) -> list[tu
             continue
         if FLASH_CHIP_LINE_RE.match(line):
             continue
-        line = SILICON_REV_RE.sub("silicon revision v<REV>", line)
+        line = SILICON_REV_RE.sub(r"\1v<REV>\2", line)
         out.append((t_s, line))
     return out
 
@@ -1128,6 +1235,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     ap.add_argument("--list", action="store_true", help="List covered and excluded ESP32-S3 apps and exit.")
     ap.add_argument("--cache", type=Path, default=default_cache_dir(), help="Cache directory for QEMU and bootloaders.")
     ap.add_argument("--orbe-run", type=Path, default=default_orbe_run(), help="Path to orbe-run binary.")
+    ap.add_argument(
+        "--orbe-timeout",
+        type=float,
+        default=None,
+        help="Override per-app wall-clock timeout in seconds for orbe-run.",
+    )
     ap.add_argument("--blobs", type=Path, default=None, help="Path to orbe ROM blob cache directory.")
     return ap.parse_args(argv)
 
@@ -1137,6 +1250,9 @@ def main(argv: list[str]) -> int:
     if args.list:
         print_inventory()
         return 0
+    if args.orbe_timeout is not None and args.orbe_timeout <= 0:
+        print("diff-esp32s3: --orbe-timeout must be positive", file=sys.stderr)
+        return 2
 
     by_name = {a.name: a for a in APPS}
     if args.apps:
@@ -1170,14 +1286,15 @@ def main(argv: list[str]) -> int:
     lib_dir = ensure_userspace_libs(qemu_bin, args.cache)
     bootloaders = ensure_bootloaders(args.cache)
 
-    qemu_ver = subprocess.check_output(
+    qemu_ver_lines = subprocess.check_output(
         [str(qemu_bin), "--version"],
         env={**os.environ, "LD_LIBRARY_PATH": f"{lib_dir}:{os.environ.get('LD_LIBRARY_PATH', '')}".rstrip(":")},
         text=True,
-    ).splitlines()[0]
-    print(f"QEMU: {qemu_ver}")
-    print(f"orbe-run: {orbe_run}")
-    print(f"Running {len(selected)} ESP32-S3 app(s)...\n")
+    ).splitlines()
+    qemu_ver = qemu_ver_lines[0] if qemu_ver_lines else str(qemu_bin)
+    print(f"QEMU: {qemu_ver}", flush=True)
+    print(f"orbe-run: {orbe_run}", flush=True)
+    print(f"Running {len(selected)} ESP32-S3 app(s)...\n", flush=True)
 
     failures: list[tuple[str, str]] = []
     t0 = time.monotonic()
@@ -1192,32 +1309,68 @@ def main(argv: list[str]) -> int:
 
             qemu_raw, qemu_err, early_rc = run_qemu(qemu_bin, lib_dir, flash_img, app)
             if early_rc is not None:
-                detail = f"QEMU exited early with code {early_rc}\nstderr:\n{qemu_err.strip()}"
+                tail = _stderr_tail(qemu_err)
+                detail = f"QEMU exited early with code {early_rc}"
+                if tail:
+                    detail += f"\nstderr:\n{tail}"
                 failures.append((app.name, detail))
-                print(f"FAIL  {app.name:28s} ({flash_mb}MB {app.boot_mode}) — QEMU exited early (rc={early_rc})")
-                print(detail)
+                print(
+                    f"FAIL  {app.name:28s} ({flash_mb:2d}MB {app.boot_mode}) — QEMU exited early (rc={early_rc})",
+                    flush=True,
+                )
+                if tail:
+                    print(f"stderr:\n{tail}", flush=True)
+                continue
+
+            if not qemu_raw:
+                tail = _stderr_tail(qemu_err)
+                detail = f"QEMU timed out or produced no serial output within {app.qemu_timeout_s:g} s"
+                if tail:
+                    detail += f"\nstderr:\n{tail}"
+                failures.append((app.name, detail))
+                print(
+                    f"FAIL  {app.name:28s} ({flash_mb:2d}MB {app.boot_mode}) — QEMU timed out",
+                    flush=True,
+                )
+                print(detail, flush=True)
                 continue
 
             try:
-                orbe_raw, _report = run_orbe(orbe_run, rom_cache, part_path, app_path, app)
+                orbe_raw, _report = run_orbe(
+                    orbe_run,
+                    rom_cache,
+                    part_path,
+                    app_path,
+                    app,
+                    orbe_timeout_s=args.orbe_timeout,
+                )
+            except OrbeTimeoutError as exc:
+                failures.append((app.name, str(exc)))
+                print(f"FAIL {app.name} orbe-run timed out after {exc.timeout_s:g} s", flush=True)
+                if tail := _stderr_tail(exc.stderr):
+                    print(f"stderr:\n{tail}", flush=True)
+                continue
             except RuntimeError as exc:
                 failures.append((app.name, str(exc)))
-                print(f"FAIL  {app.name:28s} ({flash_mb}MB {app.boot_mode}) — orbe-run error")
-                print(exc)
+                print(
+                    f"FAIL  {app.name:28s} ({flash_mb:2d}MB {app.boot_mode}) — orbe-run error",
+                    flush=True,
+                )
+                print(exc, flush=True)
                 continue
 
             ok, detail = compare_outputs(app, qemu_raw, orbe_raw)
             dt = time.monotonic() - app_start
             if ok:
-                print(f"PASS  {app.name:28s} ({flash_mb:2d}MB {app.boot_mode}, {dt:4.2f}s) — {detail}")
+                print(f"PASS  {app.name:28s} ({flash_mb:2d}MB {app.boot_mode}, {dt:4.2f}s) — {detail}", flush=True)
             else:
                 failures.append((app.name, detail))
-                print(f"FAIL  {app.name:28s} ({flash_mb:2d}MB {app.boot_mode}, {dt:4.2f}s)")
-                print(detail)
+                print(f"FAIL  {app.name:28s} ({flash_mb:2d}MB {app.boot_mode}, {dt:4.2f}s)", flush=True)
+                print(detail, flush=True)
 
     total_dt = time.monotonic() - t0
     passed = len(selected) - len(failures)
-    print(f"\nSummary: {passed}/{len(selected)} passed, {len(failures)} failed in {total_dt:.1f}s")
+    print(f"\nSummary: {passed}/{len(selected)} passed, {len(failures)} failed in {total_dt:.1f}s", flush=True)
     if failures:
         print("Failed apps: " + ", ".join(name for name, _ in failures), file=sys.stderr)
         return 1

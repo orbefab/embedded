@@ -244,7 +244,7 @@ For each app, the script builds a merged flash image (4 MB or 16 MB, matching th
 
 - Strips QEMU's ROM and second-stage bootloader banner up through `entry 0x...` (and the bootloader's `W (<n>) rtcinit: o_code calibration fail` line before app start), since `orbe` starts at `call_start_cpu0`.
 - Replaces IDF log timestamps (`I (123)` / `W (123)` / `E (123)` -> `I (<T>)` / `W (<T>)` / `E (<T>)`).
-- Drops `efuse_init: Chip rev:` and `spi_flash: detected chip:` lines, and replaces `silicon revision vX.Y` with `silicon revision v<REV>` (QEMU reports `v0.0` and `issi` flash; `orbe`'s captured board state reports `v0.2` and `boya` flash).
+- Drops `efuse_init: Chip rev:` and `spi_flash: detected chip:` lines, and replaces `silicon revision vX.Y` with `silicon revision v<REV>` only on the ESP-IDF `hello_world` chip-info line (`This is esp32s3 chip with <N> CPU core(s), ..., silicon revision vX.Y, <M>MB embedded|external flash`) so app text containing `silicon revision` is still compared (QEMU reports `v0.0` and `issi` flash; `orbe`'s captured board state reports `v0.2` and `boya` flash).
 - Any panic, `Guru Meditation Error`, `abort()`, `Backtrace:`, watchdog trigger/reset, unexpected second `ESP-ROM:` banner, non-zero `orbe-run` exit, or timeout fails the check.
 - One-shot apps must match line by line after normalization.
 - Periodic apps (`esp32s3-stock-serial` at 100 ms, `esp32s3-stock-servo` at 200 ms, `esp32s3-hello` at 1000 ms) must match line by line on their prefix and overlapping tick sequence, and both QEMU (wall-clock arrival times over a Unix-domain serial socket) and `orbe` (`t_ps` in `traces/serial.csv`) must keep their mean tick period within ±25% of the sketch's nominal period.
