@@ -35,7 +35,7 @@
     "ams1117-sot223": "0.2.2", "atmega328p-dip28": "0.2.3", "barrel-jack-dc21": "0.2.3", "capacitor-0603": "0.2.0",
     "capacitor-electrolytic-smd": "0.2.2", "ch340g": "0.2.1", "crystal-hc49us": "0.2.0", "diode-cd1206": "0.2.1",
     "diode-m7-sma": "0.2.1", "dip-socket-28": "0.2.0", "led-0805": "0.2.2", "lp2985-sot23-5": "0.2.2",
-    "pin-header-2x3": "0.2.0", "pmos-fdn340p-sot23": "0.2.1", "ptc-fuse-1812": "0.2.0", "resistor-0603": "0.2.0",
+    "pin-header-2x3": "0.2.0", "pmos-fdn340p-sot23": "0.2.2", "ptc-fuse-1812": "0.2.0", "resistor-0603": "0.2.0",
     "socket-strip-1x10": "0.2.0", "socket-strip-1x6": "0.2.0", "socket-strip-1x8": "0.2.1",
     "tactile-switch-ts42": "0.2.0", "usb-b-socket": "0.2.1",
   },

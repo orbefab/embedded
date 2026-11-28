@@ -198,6 +198,26 @@ fn format_7_keys_before_format_7_are_told_to_set_format_7() {
             "atmega328p",
             &["ratings.supply_min", "start"][..],
         ),
+        (
+            "nmos-bss138-sot23",
+            "nmos",
+            &["body_diode_forward_voltage"][..],
+        ),
+        (
+            "nmos-irf520-to220",
+            "nmos",
+            &["body_diode_forward_voltage"][..],
+        ),
+        (
+            "pmos-fdn340p-sot23",
+            "pmos",
+            &["body_diode_forward_voltage"][..],
+        ),
+        (
+            "pmos-irf9540n-to220",
+            "pmos",
+            &["body_diode_forward_voltage"][..],
+        ),
     ] {
         let found = findings(&in_format(id, 7, 6));
         let mut found: Vec<(Code, String, String)> = found
@@ -255,6 +275,10 @@ fn the_catalog_parts_in_format_5_and_6_have_no_findings() {
         "keypad-4x4-key",
         "atmega328p-tqfp32",
         "atmega328p-dip28",
+        "nmos-bss138-sot23",
+        "nmos-irf520-to220",
+        "pmos-fdn340p-sot23",
+        "pmos-irf9540n-to220",
     ] {
         let text =
             fs::read_to_string(common::repo().join(format!("parts/{id}/part.jsonc"))).unwrap();

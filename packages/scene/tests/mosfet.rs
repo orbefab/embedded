@@ -139,6 +139,14 @@ fn switches_on(drive: Drive, load: Load) {
         results.diagnostics()
     );
     assert!(
+        results
+            .diagnostics()
+            .iter()
+            .all(|d| d.code() != "mosfet.body_diode"),
+        "{label}: unexpected body diode warning: {:?}",
+        results.diagnostics()
+    );
+    assert!(
         stats.landings <= MOST_STEPS,
         "{label}: {} steps, bound {MOST_STEPS}",
         stats.landings
@@ -172,4 +180,94 @@ fn every_gate_drive_switches_every_load_within_the_step_bound() {
             switches_on(drive, load);
         }
     }
+}
+
+/// Every catalog MOSFET carries its datasheet `body_diode_forward_voltage`: reverse-biasing an off
+/// device warns `mosfet.body_diode` with its threshold, while a normally wired P-channel high-side
+/// switch (`pmos-irf9540n-to220`) stays quiet.
+#[test]
+fn catalog_mosfets_warn_when_reverse_biased_and_stay_quiet_in_normal_switching() {
+    let cases = [
+        ("nmos-bss138-sot23", "nmos", "S", "G", "D", 0.8),
+        ("nmos-irf520-to220", "nmos", "source", "gate", "drain", 0.67),
+        ("pmos-fdn340p-sot23", "pmos", "D", "G", "S", 0.7),
+        (
+            "pmos-irf9540n-to220",
+            "pmos",
+            "drain",
+            "gate",
+            "source",
+            0.67,
+        ),
+    ];
+    for (part_id, channel, high_pin, gate_pin, low_pin, vf) in cases {
+        let off_gate_net = if channel == "nmos" {
+            "psu.center"
+        } else {
+            "psu.sleeve"
+        };
+        let scene_text = format!(
+            r#"{{
+              "format": 1,
+              "parts": {{
+                "psu": {{ "type": "barrel-jack-dc21", "voltage": "5" }},
+                "m1": {{ "type": "{part_id}" }}
+              }},
+              "wires": [
+                ["psu.center", "m1.{high_pin}"],
+                ["psu.sleeve", "m1.{low_pin}"],
+                ["{off_gate_net}", "m1.{gate_pin}"]
+              ],
+              "ground": "psu.sleeve"
+            }}"#
+        );
+        let project = common::project("nano-button");
+        let path = project.path().join("rev.jsonc");
+        fs::write(&path, scene_text).unwrap();
+        let netlist = orbe_scene::read(&Files::disk(), &path).unwrap();
+        let mut json: serde_json::Value = serde_json::from_str(&netlist.json).unwrap();
+        json["analysis"] = serde_json::json!({ "op": {} });
+        let parsed = orbe_engine::netlist::parse(json.to_string().as_bytes()).unwrap();
+        let results = orbe_engine::simulate(&parsed);
+        let found: Vec<_> = results
+            .diagnostics()
+            .iter()
+            .filter(|d| d.code() == "mosfet.body_diode")
+            .collect();
+        assert_eq!(found.len(), 1, "{part_id}: {:?}", results.diagnostics());
+        let doc = serde_json::to_value(found[0]).unwrap();
+        assert_eq!(doc["refs"], serde_json::json!(["#m1"]));
+        assert_eq!(doc["data"]["channel"], channel);
+        assert_eq!(doc["data"]["forward_voltage"], vf);
+    }
+
+    // Normal high-side PMOS switch (IRF9540N: source at 12 V, gate at 0 V, drain through 1k to GND).
+    let normal_pmos = r#"{
+      "format": 1,
+      "parts": {
+        "psu": { "type": "barrel-jack-dc21", "voltage": "12" },
+        "m1": { "type": "pmos-irf9540n-to220" },
+        "rl": { "type": "resistor-axial", "resistance": "1k" }
+      },
+      "wires": [
+        ["psu.center", "m1.source"],
+        ["psu.sleeve", "m1.gate"],
+        ["m1.drain", "rl.a"],
+        ["rl.b", "psu.sleeve"]
+      ],
+      "ground": "psu.sleeve"
+    }"#;
+    let project = common::project("nano-button");
+    let path = project.path().join("pmos_ok.jsonc");
+    fs::write(&path, normal_pmos).unwrap();
+    let netlist = orbe_scene::read(&Files::disk(), &path).unwrap();
+    let mut json: serde_json::Value = serde_json::from_str(&netlist.json).unwrap();
+    json["analysis"]["transient"]["stop_ps"] = 20_000_000_000u64.into();
+    let parsed = orbe_engine::netlist::parse(json.to_string().as_bytes()).unwrap();
+    let results = orbe_engine::simulate(&parsed);
+    assert_eq!(
+        results.diagnostics(),
+        [],
+        "normal IRF9540N switch must stay quiet"
+    );
 }

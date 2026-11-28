@@ -372,3 +372,56 @@ fn mosfet_text_with_infinite_threshold() -> String {
         r#""threshold_voltage": { "value": 1e309"#,
     )
 }
+
+#[test]
+fn mosfet_body_diode_forward_voltage_is_optional_positive_volts() {
+    let with_vf = |kind: &str, value_json: &str| {
+        mosfet(kind, None).replace(
+            r#""ratings": {"#,
+            &format!(r#""body_diode_forward_voltage": {value_json}, "ratings": {{"#),
+        )
+    };
+    for kind in ["nmos", "pmos"] {
+        let omitted = netlist::parse(mosfet(kind, None).as_bytes()).unwrap();
+        let null_vf = netlist::parse(with_vf(kind, "null").as_bytes()).unwrap();
+        let set_vf =
+            netlist::parse(with_vf(kind, r#"{ "value": 0.7, "unit": "V" }"#).as_bytes()).unwrap();
+        let vf = |n: &netlist::Netlist| match &n.parts().next().unwrap().1.model {
+            Model::Nmos(Nmos(m)) | Model::Pmos(Pmos(m)) => {
+                m.body_diode_forward_voltage.as_ref().map(|v| v.si.get())
+            }
+            other => panic!("not a mosfet: {other:?}"),
+        };
+        assert_eq!(vf(&omitted), None, "{kind}");
+        assert_eq!(vf(&null_vf), None, "{kind}");
+        assert_eq!(vf(&set_vf), Some(0.7), "{kind}");
+
+        assert_eq!(
+            rejected(&with_vf(kind, r#"{ "value": 700, "unit": "mV" }"#)),
+            [(
+                "netlist.unit".to_string(),
+                "body_diode_forward_voltage".to_string(),
+                String::new()
+            )],
+            "{kind}"
+        );
+        for (value, rule) in [
+            ("0.0", "positive"),
+            ("-0.7", "positive"),
+            ("1e-320", "finite_reciprocal"),
+        ] {
+            assert_eq!(
+                rejected(&with_vf(
+                    kind,
+                    &format!(r#"{{ "value": {value}, "unit": "V" }}"#)
+                )),
+                [(
+                    "netlist.value".to_string(),
+                    "body_diode_forward_voltage".to_string(),
+                    rule.to_string()
+                )],
+                "{kind} {value}"
+            );
+        }
+    }
+}

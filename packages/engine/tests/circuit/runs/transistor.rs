@@ -141,3 +141,165 @@ fn an_nmos_writes_id_and_its_pin_power_and_its_current_rating_bounds_id() {
     let peak = diagnostics[0]["data"]["peak"].as_f64().unwrap();
     assert_eq!(peak, id.iter().copied().fold(0.0, f64::max));
 }
+
+/// An off MOSFET whose gate is tied to its source so the channel stays cut off, with `v_rev`
+/// driving the reverse-biased pin (`source` for `nmos`, `drain` for `pmos`) while the other pin
+/// sits on ground.
+fn body_diode_netlist(
+    kind: &str,
+    vf: f64,
+    analysis: serde_json::Value,
+    v_rev: serde_json::Value,
+) -> Vec<u8> {
+    let (drain, gate, source) = if kind == "nmos" {
+        ("gnd", "rev", "rev")
+    } else {
+        ("rev", "gnd", "gnd")
+    };
+    let doc = serde_json::json!({
+        "version": 1,
+        "seed": 0,
+        "analysis": analysis,
+        "ground": "gnd",
+        "nets": ["gnd", "rev"],
+        "parts": [
+            {
+                "name": "v1",
+                "kind": "voltage_source",
+                "pins": { "p": "rev", "n": "gnd" },
+                "voltage": v_rev
+            },
+            {
+                "name": "m1",
+                "kind": kind,
+                "pins": { "drain": drain, "gate": gate, "source": source },
+                "transconductance_parameter": { "value": 0.3236, "unit": "A/V^2" },
+                "threshold_voltage": { "value": 1.3, "unit": "V" },
+                "channel_length_modulation": { "value": 0.0, "unit": "1/V" },
+                "gate_source_capacitance": { "value": 2.1e-11, "unit": "F" },
+                "gate_drain_capacitance": { "value": 6e-12, "unit": "F" },
+                "drain_source_capacitance": { "value": 7e-12, "unit": "F" },
+                "body_diode_forward_voltage": { "value": vf, "unit": "V" },
+                "ratings": { "current": null, "power": null }
+            }
+        ]
+    });
+    serde_json::to_vec(&doc).unwrap()
+}
+
+#[test]
+fn reverse_biased_off_nmos_and_pmos_warn_body_diode_with_part_and_time() {
+    let tran = serde_json::json!({
+        "transient": {
+            "stop_ps": 5_000_000_000u64,
+            "max_step_ps": 100_000_000u64,
+            "grid_ps": 100_000_000u64
+        }
+    });
+    let step_at: u64 = 1_000_000_000;
+    let step_src = serde_json::json!({
+        "kind": "step",
+        "initial": { "value": 0.0, "unit": "V" },
+        "final": { "value": 3.3, "unit": "V" },
+        "at_ps": step_at
+    });
+
+    for (kind, vf, direction) in [
+        ("nmos", 0.8, "conduct from source to drain"),
+        ("pmos", 0.7, "conduct from drain to source"),
+    ] {
+        // Operating point warns at t = 0 with null over_ps.
+        let op = orbe_engine::run(
+            &body_diode_netlist(
+                kind,
+                vf,
+                serde_json::json!({ "op": {} }),
+                serde_json::json!({ "value": 3.3, "unit": "V" }),
+            ),
+            Timestamp::from_unix_seconds(0),
+        );
+        let op_diags = serde_json::to_value(op.results.diagnostics()).unwrap();
+        let arr = op_diags.as_array().unwrap();
+        assert_eq!(arr.len(), 1, "{kind} OP: {arr:?}");
+        assert_eq!(arr[0]["code"], "mosfet.body_diode");
+        assert_eq!(arr[0]["severity"], "warning");
+        assert_eq!(arr[0]["refs"], serde_json::json!(["#m1"]));
+        assert_eq!(arr[0]["t_ps"], 0);
+        assert_eq!(arr[0]["data"]["channel"], kind);
+        assert_eq!(arr[0]["data"]["forward_voltage"], vf);
+        assert_eq!(arr[0]["data"]["over_ps"], serde_json::Value::Null);
+        assert!((arr[0]["data"]["peak"].as_f64().unwrap() - 3.3).abs() < 1e-6);
+        let msg = arr[0]["message"].as_str().unwrap();
+        assert!(msg.contains("body diode is not simulated"), "{msg}");
+        assert!(msg.contains(direction), "{msg}");
+
+        // Transient: quiet until the step at 1 ms, then warns with t_ps at the edge.
+        let run = orbe_engine::run(
+            &body_diode_netlist(kind, vf, tran.clone(), step_src.clone()),
+            Timestamp::from_unix_seconds(0),
+        );
+        let diags = serde_json::to_value(run.results.diagnostics()).unwrap();
+        let arr = diags.as_array().unwrap();
+        assert_eq!(arr.len(), 1, "{kind} transient: {arr:?}");
+        assert_eq!(arr[0]["code"], "mosfet.body_diode");
+        assert_eq!(arr[0]["refs"], serde_json::json!(["#m1"]));
+        assert_eq!(arr[0]["t_ps"], step_at);
+        assert_eq!(arr[0]["data"]["channel"], kind);
+        assert_eq!(arr[0]["data"]["over_ps"], 4_000_000_000u64);
+    }
+}
+
+#[test]
+fn brief_reverse_spike_unpowered_and_below_knee_mosfets_stay_quiet() {
+    let tran = serde_json::json!({
+        "transient": {
+            "stop_ps": 10_000_000u64,
+            "max_step_ps": 500_000u64,
+            "grid_ps": 500_000u64
+        }
+    });
+    // 500 ns reverse pulse (under the 1 us hold time) stays quiet on both NMOS and PMOS.
+    let brief_pulse = serde_json::json!({
+        "kind": "pulse",
+        "initial": { "value": 0.0, "unit": "V" },
+        "pulsed": { "value": 5.0, "unit": "V" },
+        "delay_ps": 1_000_000u64,
+        "width_ps": 500_000u64,
+        "period_ps": 20_000_000u64
+    });
+    for (kind, vf) in [("nmos", 0.8), ("pmos", 0.7)] {
+        let spike = orbe_engine::run(
+            &body_diode_netlist(kind, vf, tran.clone(), brief_pulse.clone()),
+            Timestamp::from_unix_seconds(0),
+        );
+        assert_eq!(spike.results.diagnostics(), [], "{kind} brief spike");
+
+        // Unpowered (0 V) and small reverse bias (0.4 V < Vf) stay quiet at OP and in transient.
+        for volts in [0.0, 0.4, -5.0] {
+            let op = orbe_engine::run(
+                &body_diode_netlist(
+                    kind,
+                    vf,
+                    serde_json::json!({ "op": {} }),
+                    serde_json::json!({ "value": volts, "unit": "V" }),
+                ),
+                Timestamp::from_unix_seconds(0),
+            );
+            assert_eq!(op.results.diagnostics(), [], "{kind} OP at {volts} V");
+            let run = orbe_engine::run(
+                &body_diode_netlist(
+                    kind,
+                    vf,
+                    tran.clone(),
+                    serde_json::json!({ "value": volts, "unit": "V" }),
+                ),
+                Timestamp::from_unix_seconds(0),
+            );
+            assert_eq!(
+                run.results.diagnostics(),
+                [],
+                "{kind} transient at {volts} V"
+            );
+        }
+    }
+}

@@ -10,8 +10,8 @@ use crate::chip::regulator::{
     LIMIT_HOLD_PS, LIMIT_KNEE_FRACTION, LIMIT_SAG_FRACTION, MIN_CHARGE_RATE, STALL_PS, limit_drop,
 };
 use crate::diagnostic::{
-    CurrentLimitExcursion, Diagnostic, Excursion, SupplyExcursion, VoltageExcursion,
-    exceeds_rounded, significant,
+    BodyDiodeExcursion, CurrentLimitExcursion, Diagnostic, Excursion, SupplyExcursion,
+    VoltageExcursion, exceeds_rounded, significant,
 };
 use crate::finite::Finite;
 use crate::name::{Name, Quantity, Ref};
@@ -63,6 +63,8 @@ pub(crate) struct Ratings {
     drives: Vec<CoilDrive>,
     /// A powered analog part's maximum operating supply voltage.
     supply_ceilings: Vec<SupplyCeiling>,
+    /// MOSFETs whose intrinsic body diode is omitted by the Level-1 model.
+    body_diodes: Vec<BodyDiode>,
     chips: Vec<Gauge>,
     /// Each part's operating temperature, read against the world's schedule rather than a row.
     temperatures: Vec<temperature::TemperatureWatch>,
@@ -124,6 +126,12 @@ pub(crate) const SUPPLY_UNPOWERED_V: f64 = 0.1;
 /// reported voltage (1 us), matching [`LIMIT_HOLD_PS`]. Nanosecond single-clock or switching dips
 /// inside a longer low-supply episode do not replace the voltage the rail held.
 pub(crate) const SUPPLY_HOLD_PS: u64 = 1_000_000;
+
+/// Minimum picoseconds a MOSFET's body diode must stay forward-biased past its datasheet forward
+/// voltage before `mosfet.body_diode` warns (1 us), matching [`LIMIT_HOLD_PS`] and
+/// [`SUPPLY_HOLD_PS`]. Single solver steps and nanosecond switching edges stay quiet while
+/// reverse-polarity faults, H-bridge dead-time, and inductive kickback warn.
+pub(crate) const BODY_DIODE_HOLD_PS: u64 = 1_000_000;
 
 /// A probe to sample: its time, the row there, and the cores whose drive the row was solved
 /// with.
@@ -475,6 +483,31 @@ struct PendingLimit {
     pulled_since: Option<Time>,
     progress_vo: f64,
     progress_at: Time,
+}
+
+#[derive(Clone)]
+struct BodyDiode {
+    part: Ref,
+    channel: &'static str,
+    /// Net column of the intrinsic diode's anode (`source` for `nmos`, `drain` for `pmos`).
+    anode: usize,
+    /// Net column of the intrinsic diode's cathode (`drain` for `nmos`, `source` for `pmos`).
+    cathode: usize,
+    vf: f64,
+    vf_rounded: f64,
+    /// Reverse-bias spell not yet held for [`BODY_DIODE_HOLD_PS`].
+    pending: Option<PendingBodyDiode>,
+    /// True while the current continuous reverse-bias spell has passed [`BODY_DIODE_HOLD_PS`]
+    /// and is accumulating into `excursion`.
+    active: bool,
+    excursion: Option<BodyDiodeExcursion>,
+}
+
+#[derive(Clone)]
+struct PendingBodyDiode {
+    first: Time,
+    peak: f64,
+    peak_at: Time,
 }
 
 /// The basis a sustained rating with no basis of its own takes.
@@ -941,6 +974,29 @@ impl Ratings {
                 _ => {}
             }
         }
+        let mut body_diodes = Vec::new();
+        for (_, part) in netlist.parts() {
+            let (channel, mosfet, anode, cathode) = match &part.model {
+                Model::Nmos(nmos) => ("nmos", &nmos.0, nmos.0.pins[2], nmos.0.pins[0]),
+                Model::Pmos(pmos) => ("pmos", &pmos.0, pmos.0.pins[0], pmos.0.pins[2]),
+                _ => continue,
+            };
+            let Some(vf) = &mosfet.body_diode_forward_voltage else {
+                continue;
+            };
+            let vf = vf.si.get();
+            body_diodes.push(BodyDiode {
+                part: Ref::Part(part.name.clone()),
+                channel,
+                anode: columns.net(anode),
+                cathode: columns.net(cathode),
+                vf,
+                vf_rounded: significant(vf),
+                pending: None,
+                active: false,
+                excursion: None,
+            });
+        }
         Ratings {
             timing,
             watches,
@@ -949,6 +1005,7 @@ impl Ratings {
             limits,
             drives,
             supply_ceilings,
+            body_diodes,
             chips,
             temperatures: temperature::watches(netlist, columns),
             last: None,
@@ -1006,6 +1063,7 @@ impl Ratings {
             limits,
             drives,
             supply_ceilings,
+            body_diodes,
             chips,
             temperatures: _,
             last,
@@ -1021,7 +1079,15 @@ impl Ratings {
             decays,
         };
         (
-            [watches, windows, supplies, limits, drives, supply_ceilings],
+            [
+                watches,
+                windows,
+                supplies,
+                limits,
+                drives,
+                supply_ceilings,
+                body_diodes,
+            ],
             step,
         )
     }
@@ -1035,6 +1101,7 @@ impl Ratings {
             limits,
             drives,
             supply_ceilings,
+            body_diodes,
             timing: _,
             chips: _,
             temperatures: _,
@@ -1042,11 +1109,20 @@ impl Ratings {
             restarted: _,
             decays: _,
         } = self;
-        [watches, windows, supplies, limits, drives, supply_ceilings]
+        [
+            watches,
+            windows,
+            supplies,
+            limits,
+            drives,
+            supply_ceilings,
+            body_diodes,
+        ]
     }
 
     /// One `rating.*` diagnostic per quantity that went over, plus one `regulator.current_limit`
-    /// per regulator held at its current limit, through the last sample.
+    /// per regulator held at its current limit and one `mosfet.body_diode` per reverse-biased
+    /// MOSFET, through the last sample.
     pub(crate) fn findings(&self) -> Vec<Diagnostic> {
         let currents = self.watches.iter().filter_map(|watch| {
             let excursion = watch.excursion.clone()?;
@@ -1075,12 +1151,17 @@ impl Ratings {
             .supply_ceilings
             .iter()
             .filter_map(|ceiling| Some(Diagnostic::RatingVoltage(ceiling.excursion.clone()?)));
+        let body_diodes = self
+            .body_diodes
+            .iter()
+            .filter_map(|diode| Some(Diagnostic::MosfetBodyDiode(diode.excursion.clone()?)));
         currents
             .chain(voltages)
             .chain(supplies)
             .chain(limits)
             .chain(drives)
             .chain(ceilings)
+            .chain(body_diodes)
             .collect()
     }
 
@@ -1219,7 +1300,7 @@ enum Through {
 }
 
 /// How many families [`Ratings::families`] lists.
-const FAMILIES: usize = 6;
+const FAMILIES: usize = 7;
 
 /// What one sample's families read besides the row.
 struct Step<'a> {
@@ -1718,6 +1799,102 @@ impl Rated for SupplyCeiling {
                 excursion.peak_at = step.at;
             }
             Some(_) => {}
+        }
+    }
+
+    fn quiet(&self, _: &mut Step, row: &[Finite]) -> bool {
+        self.excursion.is_none() && !self.read(row).1
+    }
+}
+
+impl BodyDiode {
+    /// Forward bias across the missing intrinsic body diode (`V(source) - V(drain)` for `nmos`,
+    /// `V(drain) - V(source)` for `pmos`) and whether it exceeds `vf` after rounding.
+    fn read(&self, row: &[Finite]) -> (f64, bool) {
+        let v = row[self.anode].get() - row[self.cathode].get();
+        (v, exceeds_rounded(v, self.vf_rounded))
+    }
+}
+
+impl Rated for BodyDiode {
+    fn sample(&mut self, step: &mut Step, row: &[Finite]) {
+        let (v, over) = self.read(row);
+        if step.timing == Timing::Point {
+            if over {
+                self.excursion = Some(BodyDiodeExcursion {
+                    part: self.part.clone(),
+                    channel: self.channel,
+                    forward_voltage: self.vf,
+                    peak: v,
+                    peak_at: step.at,
+                    first: step.at,
+                    over_ps: None,
+                });
+            }
+            return;
+        }
+        if !over {
+            if self.active {
+                if !step.restarted
+                    && let (Some(last), Some(over_ps)) = (
+                        step.last,
+                        self.excursion.as_mut().and_then(|e| e.over_ps.as_mut()),
+                    )
+                {
+                    *over_ps += step.at.as_ps() - last.as_ps();
+                }
+                self.active = false;
+            }
+            self.pending = None;
+            return;
+        }
+        if self.active {
+            if let Some(excursion) = &mut self.excursion {
+                if let (Some(last), Some(over_ps)) = (step.last, &mut excursion.over_ps) {
+                    *over_ps += step.at.as_ps() - last.as_ps();
+                }
+                if v > excursion.peak {
+                    excursion.peak = v;
+                    excursion.peak_at = step.at;
+                }
+            }
+            return;
+        }
+        let pending = self.pending.get_or_insert_with(|| PendingBodyDiode {
+            first: step.back().unwrap_or(step.at),
+            peak: v,
+            peak_at: step.at,
+        });
+        if v > pending.peak {
+            pending.peak = v;
+            pending.peak_at = step.at;
+        }
+        let held_ps = step.at.as_ps().saturating_sub(pending.first.as_ps());
+        if held_ps >= BODY_DIODE_HOLD_PS {
+            let pending = self.pending.take().expect("pending was just inserted");
+            self.active = true;
+            match &mut self.excursion {
+                None => {
+                    self.excursion = Some(BodyDiodeExcursion {
+                        part: self.part.clone(),
+                        channel: self.channel,
+                        forward_voltage: self.vf,
+                        peak: pending.peak,
+                        peak_at: pending.peak_at,
+                        first: pending.first,
+                        over_ps: Some(held_ps),
+                    });
+                }
+                Some(excursion) => {
+                    if let Some(over_ps) = &mut excursion.over_ps {
+                        *over_ps += held_ps;
+                    }
+                    if pending.peak > excursion.peak {
+                        excursion.peak = pending.peak;
+                        excursion.peak_at = pending.peak_at;
+                    }
+                }
+            }
         }
     }
 
@@ -3154,7 +3331,8 @@ mod tests {
 
     /// A part in every family: a diode's peak current and a resistor's sustained power are
     /// watches, that resistor's maximum voltage is a window, then a sensor's supply minimum, a
-    /// regulator's current limit, a coil's operating drive, and the sensor's operating ceiling.
+    /// regulator's current limit, a coil's operating drive, the sensor's operating ceiling, and
+    /// a MOSFET's body diode.
     fn every_family() -> (Ratings, Columns) {
         let netlist = crate::netlist::parse(
             br#"{
@@ -3162,7 +3340,7 @@ mod tests {
           "seed": 0,
           "analysis": { "op": {} },
           "ground": "gnd",
-          "nets": ["gnd", "a", "c", "vin", "vout", "vs", "sense"],
+          "nets": ["gnd", "a", "c", "vin", "vout", "vs", "sense", "md", "ms"],
           "world": { "temperature": { "value": 25.0, "unit": "degC" } },
           "parts": [
             {
@@ -3219,6 +3397,19 @@ mod tests {
                 "supply_max": { "value": 5.5, "unit": "V" },
                 "supply_voltage": { "value": 7.0, "unit": "V" }
               }
+            },
+            {
+              "name": "m1",
+              "kind": "nmos",
+              "pins": { "drain": "md", "gate": "gnd", "source": "ms" },
+              "transconductance_parameter": { "value": 0.3236, "unit": "A/V^2" },
+              "threshold_voltage": { "value": 1.3, "unit": "V" },
+              "channel_length_modulation": { "value": 0.0, "unit": "1/V" },
+              "gate_source_capacitance": { "value": 2.1e-11, "unit": "F" },
+              "gate_drain_capacitance": { "value": 6e-12, "unit": "F" },
+              "drain_source_capacitance": { "value": 7e-12, "unit": "F" },
+              "body_diode_forward_voltage": { "value": 0.8, "unit": "V" },
+              "ratings": { "current": null, "power": null }
             }
           ]
         }"#,
@@ -3275,7 +3466,7 @@ mod tests {
         let held = [("#net.vin", 5.0), ("#net.vout", 3.3), ("#u1.iout", -0.01)];
         let clamped = [("#net.vin", 5.0), ("#net.vout", 1.0), ("#u1.iout", -2.0)];
         // Each family's index in `families`, its rows, and the ref its warning names.
-        let scenarios: [(usize, Vec<Vec<Finite>>, &str); 7] = [
+        let scenarios: [(usize, Vec<Vec<Finite>>, &str); 8] = [
             (0, vec![row(&[("#d1.i", 0.05)]), idle.clone()], "#d1.i"),
             (
                 0,
@@ -3314,6 +3505,15 @@ mod tests {
                 vec![row(&[("#net.vs", 6.0)]), idle.clone()],
                 "#s1.pin.vs",
             ),
+            (
+                6,
+                vec![
+                    row(&[("#net.ms", 2.0)]),
+                    row(&[("#net.ms", 2.0)]),
+                    idle.clone(),
+                ],
+                "#m1",
+            ),
         ];
         let covered: std::collections::BTreeSet<usize> =
             scenarios.iter().map(|(family, ..)| *family).collect();
@@ -3337,5 +3537,128 @@ mod tests {
                 "family {family} names {named}: {found:?}"
             );
         }
+    }
+
+    /// A MOSFET body diode warning waits for `BODY_DIODE_HOLD_PS` (1 us) in a transient so brief
+    /// switching spikes and single solver steps stay quiet, while unpowered or below-knee reverse
+    /// bias never warns and sustained reverse bias warns with the right time and peak.
+    #[test]
+    fn mosfet_body_diode_hold_and_threshold_rules() {
+        let netlist = crate::netlist::parse(
+            br#"{
+          "version": 1,
+          "seed": 0,
+          "analysis": { "op": {} },
+          "ground": "gnd",
+          "nets": ["gnd", "nd", "ns", "pd", "ps"],
+          "parts": [
+            {
+              "name": "mn",
+              "kind": "nmos",
+              "pins": { "drain": "nd", "gate": "gnd", "source": "ns" },
+              "transconductance_parameter": { "value": 0.3236, "unit": "A/V^2" },
+              "threshold_voltage": { "value": 1.3, "unit": "V" },
+              "channel_length_modulation": { "value": 0.0, "unit": "1/V" },
+              "gate_source_capacitance": { "value": 2.1e-11, "unit": "F" },
+              "gate_drain_capacitance": { "value": 6e-12, "unit": "F" },
+              "drain_source_capacitance": { "value": 7e-12, "unit": "F" },
+              "body_diode_forward_voltage": { "value": 0.8, "unit": "V" },
+              "ratings": { "current": null, "power": null }
+            },
+            {
+              "name": "mp",
+              "kind": "pmos",
+              "pins": { "drain": "pd", "gate": "gnd", "source": "ps" },
+              "transconductance_parameter": { "value": 4.579, "unit": "A/V^2" },
+              "threshold_voltage": { "value": 0.8, "unit": "V" },
+              "channel_length_modulation": { "value": 0.0, "unit": "1/V" },
+              "gate_source_capacitance": { "value": 7.23e-10, "unit": "F" },
+              "gate_drain_capacitance": { "value": 5.6e-11, "unit": "F" },
+              "drain_source_capacitance": { "value": 6.5e-11, "unit": "F" },
+              "body_diode_forward_voltage": { "value": 0.7, "unit": "V" },
+              "ratings": { "current": null, "power": null }
+            }
+          ]
+        }"#,
+        )
+        .unwrap();
+        let columns = Columns::new(&netlist);
+        let row = |set: &[(&str, f64)]| row_of(&columns, set);
+
+        // Operating point warns at once on either polarity, and stays quiet at or below Vf.
+        let mut op = Ratings::new(&netlist, &[], &columns, Timing::Point);
+        op.sample(Time::ZERO, &row(&[("#net.ns", 0.8), ("#net.pd", 0.7)]), &[]);
+        assert_eq!(op.findings(), []);
+        op.sample(Time::ZERO, &row(&[("#net.ns", 2.5), ("#net.pd", 1.9)]), &[]);
+        let found = op.findings();
+        assert_eq!(found.len(), 2, "{found:?}");
+
+        // Transient: brief spike under BODY_DIODE_HOLD_PS stays quiet, then held reverse bias
+        // warns with first at the start of the held spell.
+        let mut run = Ratings::new(&netlist, &[], &columns, Timing::Run);
+        run.sample(Time::from_ps(1_000), &row(&[]), &[]);
+        // Sub-1us spike on both devices (500 ns).
+        run.sample(
+            Time::from_ps(1_000_000),
+            &row(&[("#net.ns", 3.3), ("#net.pd", 3.3)]),
+            &[],
+        );
+        run.sample(
+            Time::from_ps(1_500_000),
+            &row(&[("#net.ns", 3.3), ("#net.pd", 3.3)]),
+            &[],
+        );
+        run.sample(Time::from_ps(1_600_000), &row(&[]), &[]);
+        assert_eq!(run.findings(), [], "brief spike must stay quiet");
+
+        // Below-knee reverse voltage held for 10 ms stays quiet.
+        run.sample(
+            Time::from_ps(2_000_000),
+            &row(&[("#net.ns", 0.5), ("#net.pd", 0.4)]),
+            &[],
+        );
+        run.sample(
+            Time::from_ps(12_000_000_000),
+            &row(&[("#net.ns", 0.5), ("#net.pd", 0.4)]),
+            &[],
+        );
+        assert_eq!(
+            run.findings(),
+            [],
+            "below-knee reverse bias must stay quiet"
+        );
+
+        // Edge restart at 20 ms followed by sustained reverse bias on mn (2.5 V) and mp (1.8 V).
+        run.sample(Time::from_ps(20_000_000_000), &row(&[]), &[]);
+        run.restarted();
+        run.sample(
+            Time::from_ps(20_000_001_000),
+            &row(&[("#net.ns", 2.5), ("#net.pd", 1.8)]),
+            &[],
+        );
+        assert_eq!(run.findings(), [], "1 ns after edge is still under 1 us");
+        run.sample(
+            Time::from_ps(20_001_000_000),
+            &row(&[("#net.ns", 2.5), ("#net.pd", 1.8)]),
+            &[],
+        );
+        let found = run.findings();
+        assert_eq!(found.len(), 2, "{found:?}");
+        let Diagnostic::MosfetBodyDiode(nmos) = &found[0] else {
+            panic!("expected MosfetBodyDiode: {found:?}");
+        };
+        assert_eq!(nmos.part.to_string(), "#mn");
+        assert_eq!(nmos.channel, "nmos");
+        assert_eq!(nmos.first, Time::from_ps(20_000_000_000));
+        assert_eq!(nmos.over_ps, Some(1_000_000));
+        close(nmos.peak, 2.5);
+        let Diagnostic::MosfetBodyDiode(pmos) = &found[1] else {
+            panic!("expected MosfetBodyDiode: {found:?}");
+        };
+        assert_eq!(pmos.part.to_string(), "#mp");
+        assert_eq!(pmos.channel, "pmos");
+        assert_eq!(pmos.first, Time::from_ps(20_000_000_000));
+        assert_eq!(pmos.over_ps, Some(1_000_000));
+        close(pmos.peak, 1.8);
     }
 }

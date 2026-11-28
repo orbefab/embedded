@@ -1,7 +1,7 @@
 {
-  "format": 5,
+  "format": 7,
   "part": "pmos-irf9540n-to220",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "title": "P-channel MOSFET, IRF9540N (TO-220)",
   "summary": "100 V, 23 A P-channel power MOSFET in TO-220. It is not logic-level: it turns fully on with the gate 10 V below the source.",
   "tags": ["transistor", "mosfet", "pmos", "switch", "power", "through-hole"],
@@ -73,6 +73,17 @@
         "datasheet": {
           "doc": "Infineon IRF9540NPbF, Rev. 2.1, 2026-07-17",
           "at": "Dynamic, Coss typical minus Crss typical, 400 pF minus 240 pF, VGS = 0 V, VDS = -25 V, f = 1.0 MHz",
+          "basis": "typical"
+        }
+      }
+    },
+    "body_diode_forward_voltage": {
+      "value": 0.67,
+      "unit": "V",
+      "source": {
+        "datasheet": {
+          "doc": "Infineon IRF9540NPbF, Rev. 2.1, 2026-07-17",
+          "at": "Fig. 7, Typical Source-Drain Diode Forward Voltage, TJ = 25 C, VGS = 0 V, -ISD = 0.1 A. The kind stores the magnitude (Diode Characteristics VSD lists only -1.6 V maximum at IS = -11 A with no typical)",
           "basis": "typical"
         }
       }

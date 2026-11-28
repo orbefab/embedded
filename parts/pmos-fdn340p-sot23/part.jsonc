@@ -1,7 +1,7 @@
 {
-  "format": 5,
+  "format": 7,
   "part": "pmos-fdn340p-sot23",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "title": "FDN340P P-channel MOSFET, SOT-23",
   "license": "MIT OR Apache-2.0",
   "summary": "onsemi FDN340P P-channel MOSFET in SOT-23. Lead 1 is the gate, lead 2 the source and lead 3 the drain. The dot marks lead 1.",
@@ -75,6 +75,17 @@
         "datasheet": {
           "doc": "onsemi FDN340P/D, Rev. 9, May 2025",
           "at": "Capacitance, Coss typical minus Crss typical, 121 pF minus 56 pF, VDS = -10 V, VGS = 0 V, f = 1 MHz",
+          "basis": "typical",
+        },
+      },
+    },
+    "body_diode_forward_voltage": {
+      "value": 0.7,
+      "unit": "V",
+      "source": {
+        "datasheet": {
+          "doc": "onsemi FDN340P/D, Rev. 9, May 2025",
+          "at": "Drain-Source Diode Characteristics and Maximum Ratings, VSD typical -0.7 V (-1.2 V maximum) at VGS = 0 V, IS = -0.42 A. The kind stores the magnitude",
           "basis": "typical",
         },
       },
