@@ -41,45 +41,10 @@ use crate::netlist::{Event, MIN_GAP_PS};
 /// The world quantities a part of the device kind `kind` reads, by its netlist name. A scene
 /// declares each one for every such part. None for a kind that is no device, or reads none.
 pub fn reads(kind: &str) -> &'static [Quantity] {
-    use crate::netlist::PartKind;
-    let Some(kind) = PartKind::from_name(kind) else {
-        return &[];
-    };
     match kind {
-        PartKind::Bmp280 => bmp280::model::Bmp280::WORLD,
-        PartKind::Dht22 => dht22::model::Dht22::WORLD,
-        PartKind::Resistor
-        | PartKind::Potentiometer
-        | PartKind::VoltageSource
-        | PartKind::CurrentSource
-        | PartKind::Diode
-        | PartKind::Led
-        | PartKind::Zener
-        | PartKind::LinearRegulator
-        | PartKind::Npn
-        | PartKind::Pnp
-        | PartKind::Nmos
-        | PartKind::Pmos
-        | PartKind::Capacitor
-        | PartKind::Inductor
-        | PartKind::Relay
-        | PartKind::Switch
-        | PartKind::OpAmp
-        | PartKind::AnalogTempSensor
-        | PartKind::Ne555
-        | PartKind::Atmega328p
-        | PartKind::SpiReplay
-        | PartKind::St77916
-        | PartKind::Ssd1306
-        | PartKind::Hd44780I2c
-        | PartKind::Hd44780
-        | PartKind::Cst816
-        | PartKind::Esp32s3
-        | PartKind::Ws2812
-        | PartKind::PulsesReplay
-        | PartKind::Hc595
-        | PartKind::Max7219
-        | PartKind::Sg90 => &[],
+        "bmp280" => bmp280::model::Bmp280::WORLD,
+        "dht22" => dht22::model::Dht22::WORLD,
+        _ => &[],
     }
 }
 

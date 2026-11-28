@@ -119,23 +119,7 @@ pub(crate) fn passive(model: &Model) -> Option<Passive<'_>> {
             Kind::Active(_) => None,
         },
         Model::Relay(relay) => Some(Passive::Relay(relay)),
-        Model::Resistor(_)
-        | Model::Potentiometer(_)
-        | Model::VoltageSource(_)
-        | Model::CurrentSource(_)
-        | Model::Diode(_)
-        | Model::Led(_)
-        | Model::Zener(_)
-        | Model::LinearRegulator(_)
-        | Model::Npn(_)
-        | Model::Pnp(_)
-        | Model::Nmos(_)
-        | Model::Pmos(_)
-        | Model::Capacitor(_)
-        | Model::Inductor(_)
-        | Model::Switch(_)
-        | Model::OpAmp(_)
-        | Model::AnalogTempSensor(_) => None,
+        _ => None,
     }
 }
 

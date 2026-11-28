@@ -9,7 +9,7 @@ pub(crate) mod waveform;
 mod catalog;
 
 pub(crate) use catalog::Kind;
-pub use catalog::{Conduction, Model, PartKind, engine_kinds, live_field};
+pub use catalog::{Conduction, Model, engine_kinds, live_field};
 
 use serde::{Deserialize, Serialize, Serializer};
 
@@ -295,43 +295,26 @@ pub struct Part {
 impl Model {
     /// The blobs it names, in its own field order.
     pub fn blobs(&self) -> Vec<&Blob> {
-        match self {
-            Model::Chip(chip) => match chip {
-                Chip::Esp32s3(mcu) => mcu.firmware.blobs(),
-                Chip::Ne555(_)
-                | Chip::Atmega328p(_)
-                | Chip::SpiReplay(_)
-                | Chip::St77916(_)
-                | Chip::Ssd1306(_)
-                | Chip::Hd44780I2c(_)
-                | Chip::Hd44780(_)
-                | Chip::Cst816(_)
-                | Chip::Dht22(_)
-                | Chip::Bmp280(_)
-                | Chip::Hc595(_)
-                | Chip::Max7219(_)
-                | Chip::Ws2812(_)
-                | Chip::PulsesReplay(_)
-                | Chip::Sg90(_) => Vec::new(),
-            },
-            Model::Resistor(_)
-            | Model::Potentiometer(_)
-            | Model::VoltageSource(_)
-            | Model::CurrentSource(_)
-            | Model::Diode(_)
-            | Model::Led(_)
-            | Model::Zener(_)
-            | Model::LinearRegulator(_)
-            | Model::Npn(_)
-            | Model::Pnp(_)
-            | Model::Nmos(_)
-            | Model::Pmos(_)
-            | Model::Capacitor(_)
-            | Model::Inductor(_)
-            | Model::Relay(_)
-            | Model::Switch(_)
-            | Model::OpAmp(_)
-            | Model::AnalogTempSensor(_) => Vec::new(),
+        let Model::Chip(chip) = self else {
+            return Vec::new();
+        };
+        match chip {
+            Chip::Esp32s3(mcu) => mcu.firmware.blobs(),
+            Chip::Ne555(_)
+            | Chip::Atmega328p(_)
+            | Chip::SpiReplay(_)
+            | Chip::St77916(_)
+            | Chip::Ssd1306(_)
+            | Chip::Hd44780I2c(_)
+            | Chip::Hd44780(_)
+            | Chip::Cst816(_)
+            | Chip::Dht22(_)
+            | Chip::Bmp280(_)
+            | Chip::Hc595(_)
+            | Chip::Max7219(_)
+            | Chip::Ws2812(_)
+            | Chip::PulsesReplay(_)
+            | Chip::Sg90(_) => Vec::new(),
         }
     }
 
@@ -368,43 +351,26 @@ impl Model {
 
     /// [`device`](Self::device)'s events, for appending one.
     fn events_mut(&mut self) -> Option<&mut Events> {
-        match self {
-            Model::Chip(chip) => match chip {
-                Chip::Cst816(dev) => Some(&mut dev.events),
-                Chip::Ne555(_)
-                | Chip::Atmega328p(_)
-                | Chip::SpiReplay(_)
-                | Chip::St77916(_)
-                | Chip::Ssd1306(_)
-                | Chip::Hd44780I2c(_)
-                | Chip::Hd44780(_)
-                | Chip::Dht22(_)
-                | Chip::Bmp280(_)
-                | Chip::Hc595(_)
-                | Chip::Max7219(_)
-                | Chip::Ws2812(_)
-                | Chip::PulsesReplay(_)
-                | Chip::Esp32s3(_)
-                | Chip::Sg90(_) => None,
-            },
-            Model::Resistor(_)
-            | Model::Potentiometer(_)
-            | Model::VoltageSource(_)
-            | Model::CurrentSource(_)
-            | Model::Diode(_)
-            | Model::Led(_)
-            | Model::Zener(_)
-            | Model::LinearRegulator(_)
-            | Model::Npn(_)
-            | Model::Pnp(_)
-            | Model::Nmos(_)
-            | Model::Pmos(_)
-            | Model::Capacitor(_)
-            | Model::Inductor(_)
-            | Model::Relay(_)
-            | Model::Switch(_)
-            | Model::OpAmp(_)
-            | Model::AnalogTempSensor(_) => None,
+        let Model::Chip(chip) = self else {
+            return None;
+        };
+        match chip {
+            Chip::Cst816(dev) => Some(&mut dev.events),
+            Chip::Ne555(_)
+            | Chip::Atmega328p(_)
+            | Chip::SpiReplay(_)
+            | Chip::St77916(_)
+            | Chip::Ssd1306(_)
+            | Chip::Hd44780I2c(_)
+            | Chip::Hd44780(_)
+            | Chip::Dht22(_)
+            | Chip::Bmp280(_)
+            | Chip::Hc595(_)
+            | Chip::Max7219(_)
+            | Chip::Ws2812(_)
+            | Chip::PulsesReplay(_)
+            | Chip::Esp32s3(_)
+            | Chip::Sg90(_) => None,
         }
     }
 }

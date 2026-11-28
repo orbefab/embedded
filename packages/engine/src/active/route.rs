@@ -57,24 +57,7 @@ impl Routing {
                     fixed_rails[reg.pins[1].index()] = true;
                     fixed_rails[reg.pins[2].index()] = true;
                 }
-                Model::VoltageSource(_)
-                | Model::Resistor(_)
-                | Model::Potentiometer(_)
-                | Model::CurrentSource(_)
-                | Model::Diode(_)
-                | Model::Led(_)
-                | Model::Zener(_)
-                | Model::Npn(_)
-                | Model::Pnp(_)
-                | Model::Nmos(_)
-                | Model::Pmos(_)
-                | Model::Capacitor(_)
-                | Model::Inductor(_)
-                | Model::Relay(_)
-                | Model::Switch(_)
-                | Model::OpAmp(_)
-                | Model::AnalogTempSensor(_)
-                | Model::Chip(_) => {}
+                _ => {}
             }
             for (pin_idx, &net) in part.model.pins().iter().enumerate() {
                 net_pins[net.index()].push((part_id, pin_idx));

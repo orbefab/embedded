@@ -113,22 +113,7 @@ impl Inputs {
                         unite_dc_paths(&mut joined, &part.model);
                     }
                 },
-                model @ (Model::Resistor(_)
-                | Model::Potentiometer(_)
-                | Model::VoltageSource(_)
-                | Model::CurrentSource(_)
-                | Model::Diode(_)
-                | Model::Led(_)
-                | Model::Zener(_)
-                | Model::LinearRegulator(_)
-                | Model::Npn(_)
-                | Model::Pnp(_)
-                | Model::Nmos(_)
-                | Model::Pmos(_)
-                | Model::Inductor(_)
-                | Model::Relay(_)
-                | Model::OpAmp(_)
-                | Model::AnalogTempSensor(_)) => {
+                model => {
                     debug_assert!(!is_active(id));
                     unite_dc_paths(&mut joined, model);
                 }

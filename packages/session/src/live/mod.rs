@@ -1178,47 +1178,8 @@ impl Open {
             .lines()
             .map(str::to_string)
             .collect();
-        let brightness = match orbe_engine::netlist::PartKind::from_name(panel.kind) {
-            Some(orbe_engine::netlist::PartKind::Max7219) => Some(
-                orbe_engine::device::max7219::dot_brightness(&panel, &display.image()),
-            ),
-            Some(
-                orbe_engine::netlist::PartKind::Resistor
-                | orbe_engine::netlist::PartKind::Potentiometer
-                | orbe_engine::netlist::PartKind::VoltageSource
-                | orbe_engine::netlist::PartKind::CurrentSource
-                | orbe_engine::netlist::PartKind::Diode
-                | orbe_engine::netlist::PartKind::Led
-                | orbe_engine::netlist::PartKind::Zener
-                | orbe_engine::netlist::PartKind::LinearRegulator
-                | orbe_engine::netlist::PartKind::Npn
-                | orbe_engine::netlist::PartKind::Pnp
-                | orbe_engine::netlist::PartKind::Nmos
-                | orbe_engine::netlist::PartKind::Pmos
-                | orbe_engine::netlist::PartKind::Capacitor
-                | orbe_engine::netlist::PartKind::Inductor
-                | orbe_engine::netlist::PartKind::Relay
-                | orbe_engine::netlist::PartKind::Switch
-                | orbe_engine::netlist::PartKind::OpAmp
-                | orbe_engine::netlist::PartKind::AnalogTempSensor
-                | orbe_engine::netlist::PartKind::Ne555
-                | orbe_engine::netlist::PartKind::Atmega328p
-                | orbe_engine::netlist::PartKind::SpiReplay
-                | orbe_engine::netlist::PartKind::St77916
-                | orbe_engine::netlist::PartKind::Ssd1306
-                | orbe_engine::netlist::PartKind::Hd44780I2c
-                | orbe_engine::netlist::PartKind::Hd44780
-                | orbe_engine::netlist::PartKind::Cst816
-                | orbe_engine::netlist::PartKind::Dht22
-                | orbe_engine::netlist::PartKind::Bmp280
-                | orbe_engine::netlist::PartKind::Esp32s3
-                | orbe_engine::netlist::PartKind::Ws2812
-                | orbe_engine::netlist::PartKind::PulsesReplay
-                | orbe_engine::netlist::PartKind::Hc595
-                | orbe_engine::netlist::PartKind::Sg90,
-            )
-            | None => None,
-        };
+        let brightness = (panel.kind == "max7219")
+            .then(|| orbe_engine::device::max7219::dot_brightness(&panel, &display.image()));
         Screen {
             kind: panel.kind.to_string(),
             width: panel.width,
@@ -1550,53 +1511,11 @@ fn pin_names(refs: &RefMap) -> BTreeMap<String, String> {
     names
 }
 
-fn is_relay_kind(kind: orbe_engine::netlist::PartKind) -> bool {
-    use orbe_engine::netlist::PartKind;
-    match kind {
-        PartKind::Relay => true,
-        PartKind::Resistor
-        | PartKind::Potentiometer
-        | PartKind::VoltageSource
-        | PartKind::CurrentSource
-        | PartKind::Diode
-        | PartKind::Led
-        | PartKind::Zener
-        | PartKind::LinearRegulator
-        | PartKind::Npn
-        | PartKind::Pnp
-        | PartKind::Nmos
-        | PartKind::Pmos
-        | PartKind::Capacitor
-        | PartKind::Inductor
-        | PartKind::Switch
-        | PartKind::OpAmp
-        | PartKind::AnalogTempSensor
-        | PartKind::Ne555
-        | PartKind::Atmega328p
-        | PartKind::SpiReplay
-        | PartKind::St77916
-        | PartKind::Ssd1306
-        | PartKind::Hd44780I2c
-        | PartKind::Hd44780
-        | PartKind::Cst816
-        | PartKind::Dht22
-        | PartKind::Bmp280
-        | PartKind::Esp32s3
-        | PartKind::Ws2812
-        | PartKind::PulsesReplay
-        | PartKind::Hc595
-        | PartKind::Max7219
-        | PartKind::Sg90 => false,
-    }
-}
-
 /// The flat name of the one relay under `path`: its own engine part, or the only relay
 /// inside it.
 fn relay_engine(refs: &RefMap, path: &str) -> Option<String> {
     let part = refs.parts.get(path)?;
-    if let Some(engine) = part.engine.iter().find(|engine| {
-        orbe_engine::netlist::PartKind::from_name(&engine.kind).is_some_and(is_relay_kind)
-    }) {
+    if let Some(engine) = part.engine.iter().find(|engine| engine.kind == "relay") {
         return Some(engine.name.clone());
     }
     let mut found = None;

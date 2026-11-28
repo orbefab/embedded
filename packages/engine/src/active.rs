@@ -479,8 +479,11 @@ impl Core {
 
     /// Keeps every change of what an LED chain shows, for a run that writes them.
     fn keep_shown(&mut self) {
-        if let Core::Device(core) = self {
-            core.keep_shown();
+        match self {
+            Core::Device(core) => core.keep_shown(),
+            Core::Mcu(_) | Core::Net(_) => {}
+            #[cfg(test)]
+            Core::Script(_) => {}
         }
     }
 
@@ -1192,11 +1195,16 @@ impl Actives {
     pub(crate) fn warnings(&self, circuit: &Circuit, through: Time) -> Vec<Diagnostic> {
         let mut found = Vec::new();
         for ((core, ahead), chip) in self.committed.iter().zip(&self.ahead).zip(&circuit.actives) {
-            if let Core::Mcu(copy) = &ahead.core {
-                let symbol = |pc| mcu::symbolize(model(circuit, chip), pc);
-                for (at, note) in copy.notes(through) {
-                    found.push(mcu::note(Ref::Part(name(circuit, chip)), at, note, symbol));
+            match &ahead.core {
+                Core::Mcu(copy) => {
+                    let symbol = |pc| mcu::symbolize(model(circuit, chip), pc);
+                    for (at, note) in copy.notes(through) {
+                        found.push(mcu::note(Ref::Part(name(circuit, chip)), at, note, symbol));
+                    }
                 }
+                Core::Device(_) | Core::Net(_) => {}
+                #[cfg(test)]
+                Core::Script(_) => {}
             }
             match core {
                 Core::Device(dev) => {
@@ -1232,8 +1240,11 @@ impl Actives {
             .iter()
             .zip(&circuit.actives)
             .filter_map(|(core, chip)| {
-                let Core::Mcu(core) = core else {
-                    return None;
+                let core = match core {
+                    Core::Mcu(core) => core,
+                    Core::Device(_) | Core::Net(_) => return None,
+                    #[cfg(test)]
+                    Core::Script(_) => return None,
                 };
                 let (at, fault) = core.fault()?;
                 let symbol = |pc| mcu::symbolize(model(circuit, chip), pc);
@@ -1710,30 +1721,10 @@ impl Actives {
 
 /// The netlist chip of a microcontroller's part.
 fn model<'c>(circuit: &'c Circuit, chip: &Chip) -> &'c crate::netlist::Chip {
-    use crate::netlist::Model;
     let part = chip.part.expect("a microcontroller is a part");
     match &circuit.netlist.part(part).model {
-        Model::Chip(model) => model,
-        Model::Resistor(_)
-        | Model::Potentiometer(_)
-        | Model::VoltageSource(_)
-        | Model::CurrentSource(_)
-        | Model::Diode(_)
-        | Model::Led(_)
-        | Model::Zener(_)
-        | Model::LinearRegulator(_)
-        | Model::Npn(_)
-        | Model::Pnp(_)
-        | Model::Nmos(_)
-        | Model::Pmos(_)
-        | Model::Capacitor(_)
-        | Model::Inductor(_)
-        | Model::Relay(_)
-        | Model::Switch(_)
-        | Model::OpAmp(_)
-        | Model::AnalogTempSensor(_) => {
-            unreachable!("a microcontroller's core belongs to a chip part")
-        }
+        crate::netlist::Model::Chip(model) => model,
+        _ => unreachable!("a microcontroller's core belongs to a chip part"),
     }
 }
 
