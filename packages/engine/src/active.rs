@@ -215,11 +215,27 @@ impl Clone for Core {
     /// decoded instructions, so a landing leaves the running core's table in place and a rewind
     /// starts that core empty.
     fn clone_from(&mut self, source: &Self) {
-        match (self, source) {
-            (Core::Device(core), Core::Device(source)) => core.copy_from(&**source),
-            (Core::Mcu(mcu), Core::Mcu(source)) => mcu.clone_from(source),
-            (Core::Net(net), Core::Net(source)) => net.clone_from(source),
-            (core, source) => *core = source.clone(),
+        match self {
+            Core::Device(core) => match source {
+                Core::Device(source) => core.copy_from(&**source),
+                Core::Mcu(_) | Core::Net(_) => *self = source.clone(),
+                #[cfg(test)]
+                Core::Script(_) => *self = source.clone(),
+            },
+            Core::Mcu(mcu) => match source {
+                Core::Mcu(source) => mcu.clone_from(source),
+                Core::Device(_) | Core::Net(_) => *self = source.clone(),
+                #[cfg(test)]
+                Core::Script(_) => *self = source.clone(),
+            },
+            Core::Net(net) => match source {
+                Core::Net(source) => net.clone_from(source),
+                Core::Device(_) | Core::Mcu(_) => *self = source.clone(),
+                #[cfg(test)]
+                Core::Script(_) => *self = source.clone(),
+            },
+            #[cfg(test)]
+            Core::Script(_) => *self = source.clone(),
         }
     }
 }
@@ -465,8 +481,11 @@ impl Core {
 
     /// Keeps every change of what an LED chain shows, for a run that writes them.
     fn keep_shown(&mut self) {
-        if let Core::Device(core) = self {
-            core.keep_shown();
+        match self {
+            Core::Device(core) => core.keep_shown(),
+            Core::Mcu(_) | Core::Net(_) => {}
+            #[cfg(test)]
+            Core::Script(_) => {}
         }
     }
 
@@ -1184,7 +1203,9 @@ impl Actives {
     fn shown(&self, is: impl Fn(Shows) -> bool) -> impl Iterator<Item = &dyn Hosted> {
         self.committed.iter().filter_map(move |core| match core {
             Core::Device(dev) if is(dev.shows()) => Some(&**dev),
-            _ => None,
+            Core::Device(_) | Core::Mcu(_) | Core::Net(_) => None,
+            #[cfg(test)]
+            Core::Script(_) => None,
         })
     }
 
@@ -1194,11 +1215,16 @@ impl Actives {
     pub(crate) fn warnings(&self, circuit: &Circuit, through: Time) -> Vec<Diagnostic> {
         let mut found = Vec::new();
         for ((core, ahead), chip) in self.committed.iter().zip(&self.ahead).zip(&circuit.actives) {
-            if let Core::Mcu(copy) = &ahead.core {
-                let symbol = |pc| mcu::symbolize(model(circuit, chip), pc);
-                for (at, note) in copy.notes(through) {
-                    found.push(mcu::note(Ref::Part(name(circuit, chip)), at, note, symbol));
+            match &ahead.core {
+                Core::Mcu(copy) => {
+                    let symbol = |pc| mcu::symbolize(model(circuit, chip), pc);
+                    for (at, note) in copy.notes(through) {
+                        found.push(mcu::note(Ref::Part(name(circuit, chip)), at, note, symbol));
+                    }
                 }
+                Core::Device(_) | Core::Net(_) => {}
+                #[cfg(test)]
+                Core::Script(_) => {}
             }
             match core {
                 Core::Device(dev) => {
@@ -1234,8 +1260,11 @@ impl Actives {
             .iter()
             .zip(&circuit.actives)
             .filter_map(|(core, chip)| {
-                let Core::Mcu(core) = core else {
-                    return None;
+                let core = match core {
+                    Core::Mcu(core) => core,
+                    Core::Device(_) | Core::Net(_) => return None,
+                    #[cfg(test)]
+                    Core::Script(_) => return None,
                 };
                 let (at, fault) = core.fault()?;
                 let symbol = |pc| mcu::symbolize(model(circuit, chip), pc);
@@ -1520,7 +1549,11 @@ impl Actives {
                 Core::Device(dev) => dev.in_flight(at),
                 Core::Mcu(chip) => match &ahead.core {
                     Core::Mcu(copy) => chip.in_flight(copy, at),
-                    _ => unreachable!("a copy is of its core's kind"),
+                    Core::Device(_) | Core::Net(_) => {
+                        unreachable!("a copy is of its core's kind")
+                    }
+                    #[cfg(test)]
+                    Core::Script(_) => unreachable!("a copy is of its core's kind"),
                 },
                 Core::Net(_) => Vec::new(),
                 #[cfg(test)]
@@ -1717,10 +1750,14 @@ fn model<'c>(circuit: &'c Circuit, chip: &Chip) -> &'c crate::netlist::Chip {
 
 /// The name of a chip's part. A test's script chip is no part and carries its own.
 fn name(circuit: &Circuit, chip: &Chip) -> Name {
-    match (chip.part, &chip.core) {
-        (Some(part), _) => circuit.netlist.part(part).name.clone(),
-        #[cfg(test)]
-        (None, Core::Script(core)) => core.name(),
-        (None, _) => unreachable!("only a test's script chip and the network are no part"),
+    match chip.part {
+        Some(part) => circuit.netlist.part(part).name.clone(),
+        None => match &chip.core {
+            #[cfg(test)]
+            Core::Script(core) => core.name(),
+            Core::Device(_) | Core::Mcu(_) | Core::Net(_) => {
+                unreachable!("only a test's script chip and the network are no part")
+            }
+        },
     }
 }
