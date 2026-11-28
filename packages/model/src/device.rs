@@ -32,9 +32,10 @@ pub trait Device: State {
     /// The world quantities it reads with [`Cx::world`]. A scene with a part of this device
     /// declares each one. None, unless it says otherwise.
     const WORLD: &'static [Quantity] = &[];
-    /// Volt. The host stamps every output once the supply rises to this, and stamps every
-    /// output off once it falls below [`RELEASE_SUPPLY_V`](Self::RELEASE_SUPPLY_V), until it
-    /// rises to this again. [`Device::drive`] still reports the logical level. `None` drives
+    /// Volt. The host stamps every output and [`Device::draw`] once the supply rises to this,
+    /// and stamps every output off and [`Device::released_draw`] once it falls below
+    /// [`RELEASE_SUPPLY_V`](Self::RELEASE_SUPPLY_V), until it rises to this again.
+    /// [`Device::drive`] and [`Device::draw`] still report the powered levels. `None` drives
     /// at any supply.
     const MIN_SUPPLY_V: Option<f64> = None;
     /// Volt, at most [`MIN_SUPPLY_V`](Self::MIN_SUPPLY_V). `None` releases at
@@ -62,6 +63,11 @@ pub trait Device: State {
     fn drive(&self) -> Drives;
     /// What it draws from its supply now. [`Draw::NONE`] unless it says otherwise.
     fn draw(&self) -> Draw {
+        Draw::NONE
+    }
+    /// What it draws from its supply while its supply gate is off, when
+    /// [`min_supply_v`](Self::min_supply_v) is `Some`. [`Draw::NONE`] by default.
+    fn released_draw(&self) -> Draw {
         Draw::NONE
     }
     /// Its watches' levels from `at` on.

@@ -280,6 +280,13 @@ impl<const N: usize> Device for Ws2812<N> {
         }
     }
 
+    fn released_draw(&self) -> Draw {
+        Draw {
+            amps: f64::from(self.count) * self.idle,
+            holds_above_v: self.holds_above_v,
+        }
+    }
+
     fn view(&self) -> View<'_> {
         View::Leds(self.leds[..usize::from(self.count)].as_flattened())
     }

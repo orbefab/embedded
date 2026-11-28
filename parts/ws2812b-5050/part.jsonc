@@ -86,7 +86,7 @@
       "source": {
         "datasheet": {
           "doc": "Worldsemi WS2812B-V5 Datasheet, V1.0",
-          "at": "p2 Absolute Maximum Ratings, Power supply voltage VDD: +3.7 to +5.3 V; below 3.7 V the pixel clears and ignores DIN",
+          "at": "p2 Absolute Maximum Ratings, Power supply voltage VDD: +3.7 to +5.3 V",
           "basis": "min",
         },
       },
@@ -163,7 +163,7 @@
     },
     {
       "what": "supply voltage",
-      "why": "Page 2 rates VDD from +3.7 V to +5.3 V. Below 3.7 V the pixel clears to off, ignores DIN and releases DOUT, leaving only the faded quiescent draw (0 A at 0 V).",
+      "why": "Page 2 rates VDD from +3.7 V to +5.3 V and gives no power-on reset or falling threshold. The pixel powers up once VDD rises to 3.7 V, and clears to off, ignores DIN and releases DOUT once VDD falls below 3.33 V (90% of 3.7 V, an estimate), leaving only the faded quiescent draw (0 A at 0 V).",
     },
     {
       "what": "input thresholds at non-5 V supply",

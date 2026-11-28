@@ -452,10 +452,7 @@ impl Device for Max7219 {
         let Some(spec) = self.draw else {
             return Draw::NONE;
         };
-        if !self.powered {
-            return Draw::NONE;
-        }
-        let amps = if self.active() {
+        let amps = if self.display_test || !self.shutdown {
             spec.logic_a + f64::from(self.lit_dots) * self.dot_a
         } else {
             spec.shutdown_a

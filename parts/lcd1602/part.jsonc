@@ -92,7 +92,7 @@
     {
       "what": "the module's supply range",
       "pins": ["VDD"],
-      "why": "Vishay rates the module 4.7 V to 5.3 V (p. 1). The controller runs from 2.7 V and the glass needs VDD - V0 of at least 3.0 V. A bus cycle with VDD between 2.7 V and 4.7 V runs as the controller runs there and warns chip.protocol rule low_supply. A supply between 5.3 V and 7.0 V does not warn, and over 7.0 V warns rating.voltage.",
+      "why": "Vishay rates the module 4.7 V to 5.3 V (p. 1). The controller powers up once VDD rises to 2.7 V and keeps running until VDD falls below 2.4 V (Hitachi gives no falling threshold, so 2.4 V is an estimate), and the glass needs VDD - V0 of at least 3.0 V. A bus cycle while powered with VDD below 4.7 V runs and warns chip.protocol rule low_supply. A supply between 5.3 V and 7.0 V does not warn, and over 7.0 V warns rating.voltage.",
     },
     {
       "what": "blue transmissive visibility",

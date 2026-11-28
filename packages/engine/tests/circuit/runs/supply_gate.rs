@@ -647,3 +647,294 @@ fn hd44780_supply_gate_ramps_and_holds_hysteresis_band() {
         vdd[changes[1] - 1]
     );
 }
+
+/// An HD44780 on 2.8 V through 50 ohm with a 10 mA device draw and no output load. Powered, VDD
+/// sits near 2.3 V (below the 2.4 V release); released, near 2.8 V (above the 2.7 V minimum).
+fn hd44780_draw_netlist(
+    wave: serde_json::Value,
+    cv: Option<(f64, Option<f64>)>,
+    stop_ps: u64,
+    max_step_ps: u64,
+) -> serde_json::Value {
+    let mut parts = vec![
+        source("vs", "vs", wave),
+        resistor("rs_vdd", "vs", "vdd", 50.0),
+        resistor("r_v0", "v0", "gnd", 10_000.0),
+        resistor("r_a", "a", "gnd", 10_000.0),
+    ];
+    if let Some((farad, initial)) = cv {
+        parts.push(capacitor("cv", "vdd", farad, initial));
+    }
+    parts.push(serde_json::json!({
+        "name": "lcd",
+        "kind": "hd44780",
+        "pins": {
+            "VSS": "gnd", "VDD": "vdd", "V0": "v0",
+            "RS": "rs", "RW": "rw", "E": "gnd",
+            "D0": "d0", "D1": "d1", "D2": "d2", "D3": "d3",
+            "D4": "d4", "D5": "d5", "D6": "d6", "D7": "d7",
+            "A": "a", "K": "gnd",
+        },
+        "output": stage(100.0, 100.0),
+        "pull_up": val(40_000.0, "ohm"),
+        "input_threshold": { "low": val(0.12, "1"), "high": val(0.44, "1") },
+        "operating_voltage": val(4.7, "V"),
+        "lcd_voltage": val(3.0, "V"),
+        "backlight_voltage": val(3.5, "V"),
+        "draw": {
+            "logic_current": val(0.010, "A"),
+            "holds_above": val(2.7, "V"),
+        },
+    }));
+    serde_json::json!({
+        "version": 1,
+        "seed": 0,
+        "analysis": { "transient": {
+            "stop_ps": stop_ps, "max_step_ps": max_step_ps, "grid_ps": max_step_ps,
+        } },
+        "ground": "gnd",
+        "nets": ["gnd", "vs", "vdd", "rs", "rw", "d0", "d1", "d2", "d3", "d4", "d5", "d6", "d7", "v0", "a"],
+        "parts": parts,
+    })
+}
+
+/// Without a capacitor on VDD, the inconsistent device draw reports `chip.unsettled` promptly
+/// rather than falling into a 1 ps limit cycle.
+#[test]
+fn hd44780_device_draw_without_cap_reports_unsettled_promptly() {
+    // 1) Constant 2.8 V: OP and 10 ms transient both fail at t = 0 with `chip.unsettled`.
+    let dc = hd44780_draw_netlist(val(2.8, "V"), None, 10 * MS, MS / 10);
+    let mut op = dc.clone();
+    op["analysis"] = serde_json::json!({ "op": {} });
+    let op_netlist = netlist::parse(&serde_json::to_vec(&op).unwrap()).unwrap();
+    let op_res = orbe_engine::simulate(&op_netlist);
+    let op_codes: Vec<_> = op_res.diagnostics().iter().map(|d| d.code()).collect();
+    assert_eq!(op_codes, ["chip.unsettled"], "hd44780 draw op");
+    assert!(op_res.observations().op().is_none());
+
+    let dc_netlist = netlist::parse(&serde_json::to_vec(&dc).unwrap()).unwrap();
+    let (dc_res, dc_stats) = orbe_engine::simulate_stats(&dc_netlist);
+    let dc_codes: Vec<_> = dc_res.diagnostics().iter().map(|d| d.code()).collect();
+    assert_eq!(dc_codes, ["chip.unsettled"], "hd44780 draw dc tran");
+    assert_eq!(dc_stats.landings, 0, "dc tran must fail at t = 0");
+
+    // 2) Starts cleanly off at 0 V, then steps to 2.8 V at 1 ms with no cap.
+    let step = serde_json::json!({
+        "kind": "step", "initial": val(0.0, "V"), "final": val(2.8, "V"), "at_ps": MS,
+    });
+    let stepped = hd44780_draw_netlist(step, None, 10 * MS, MS / 10);
+    let stepped_netlist = netlist::parse(&serde_json::to_vec(&stepped).unwrap()).unwrap();
+    let (stepped_res, stepped_stats) = orbe_engine::simulate_stats(&stepped_netlist);
+    let stepped_codes: Vec<_> = stepped_res.diagnostics().iter().map(|d| d.code()).collect();
+    assert_eq!(stepped_codes, ["chip.unsettled"], "hd44780 draw stepped");
+    assert!(
+        stepped_stats.landings < 100,
+        "stepped run must stop promptly at the edge, took {} landings",
+        stepped_stats.landings
+    );
+}
+
+/// Local strict maxima and minima of a trace, excluding the endpoints.
+fn extrema(values: &[f64]) -> (Vec<f64>, Vec<f64>) {
+    let mut peaks = Vec::new();
+    let mut troughs = Vec::new();
+    for k in 1..values.len().saturating_sub(1) {
+        let (prev, curr, next) = (values[k - 1], values[k], values[k + 1]);
+        if curr > prev && curr > next {
+            peaks.push(curr);
+        } else if curr < prev && curr < next {
+            troughs.push(curr);
+        }
+    }
+    (peaks, troughs)
+}
+
+/// The same HD44780 circuit with 1 uF on VDD oscillates cleanly between 2.40 V and 2.70 V.
+#[test]
+fn hd44780_device_draw_with_cap_oscillates_at_band_thresholds() {
+    for (label, wave, initial) in [
+        ("dc with initial 0 V", val(2.8, "V"), Some(0.0)),
+        (
+            "stepped 0 to 2.8 V",
+            serde_json::json!({
+                "kind": "step", "initial": val(0.0, "V"), "final": val(2.8, "V"), "at_ps": MS / 10,
+            }),
+            None,
+        ),
+    ] {
+        let doc = hd44780_draw_netlist(wave, Some((1e-6, initial)), 2 * MS, 50_000_000);
+        let netlist = netlist::parse(&serde_json::to_vec(&doc).unwrap()).unwrap();
+        let results = orbe_engine::simulate_steps(&netlist);
+        let errors: Vec<_> = results
+            .diagnostics()
+            .iter()
+            .filter(|d| d.severity() == orbe_engine::diagnostic::Severity::Error)
+            .collect();
+        assert!(errors.is_empty(), "{label}: {errors:?}");
+        let vdd = column(&results, "#net.vdd");
+        let (peaks, troughs) = extrema(&vdd);
+        assert!(
+            peaks.len() >= 5 && troughs.len() >= 5,
+            "{label}: expected clean oscillation, got {} peaks and {} troughs",
+            peaks.len(),
+            troughs.len()
+        );
+        for &p in &peaks {
+            assert!(
+                (p - 2.70).abs() < 1e-3,
+                "{label}: peak {p} V not near 2.70 V"
+            );
+        }
+        for &t in &troughs {
+            assert!(
+                (t - 2.40).abs() < 1e-3,
+                "{label}: trough {t} V not near 2.40 V"
+            );
+        }
+    }
+}
+
+/// MAX7219 with a device draw whose powered load pulls VCC below 1.8 V while releasing lets it
+/// rise above 2.0 V: reports `chip.unsettled` promptly without a capacitor, and oscillates
+/// cleanly between 1.80 V and 2.00 V with 1 uF on VCC.
+#[test]
+fn max7219_device_draw_unsettled_without_cap_and_oscillates_with_cap() {
+    let make = |wave: serde_json::Value, cv: Option<(f64, Option<f64>)>, stop_ps: u64| {
+        let mut parts = vec![
+            source("vs", "vs", wave),
+            resistor("rs", "vs", "vcc", 50.0),
+            resistor("r_dout", "dout", "gnd", 1_000_000.0),
+            resistor("r_iset", "iset", "gnd", 1_000_000.0),
+        ];
+        if let Some((farad, initial)) = cv {
+            parts.push(capacitor("cv", "vcc", farad, initial));
+        }
+        parts.push(serde_json::json!({
+            "name": "u1",
+            "kind": "max7219",
+            "pins": {
+                "VCC": "vcc", "GND": "gnd", "DIN": "gnd", "CLK": "gnd",
+                "LOAD": "gnd", "DOUT": "dout", "ISET": "iset",
+            },
+            "input_threshold": { "low": val(0.8, "V"), "high": val(3.5, "V") },
+            "dout": stage(1000.0, 250.0),
+            "led_forward_voltage": val(1.85, "V"),
+            "draw": {
+                "shutdown_current": val(0.010, "A"),
+                "logic_current": val(0.010, "A"),
+                "holds_above": val(2.0, "V"),
+            },
+        }));
+        serde_json::json!({
+            "version": 1,
+            "seed": 0,
+            "analysis": { "transient": {
+                "stop_ps": stop_ps, "max_step_ps": 50_000_000u64, "grid_ps": 50_000_000u64,
+            } },
+            "ground": "gnd",
+            "nets": ["gnd", "vs", "vcc", "dout", "iset"],
+            "parts": parts,
+        })
+    };
+
+    let no_cap = make(val(2.1, "V"), None, 10 * MS);
+    let (res, stats) = orbe_engine::simulate_stats(
+        &netlist::parse(&serde_json::to_vec(&no_cap).unwrap()).unwrap(),
+    );
+    let codes: Vec<_> = res.diagnostics().iter().map(|d| d.code()).collect();
+    assert_eq!(codes, ["chip.unsettled"], "max7219 draw without cap");
+    assert_eq!(
+        stats.landings, 0,
+        "max7219 inconsistent draw must fail at t = 0"
+    );
+
+    let with_cap = make(val(2.1, "V"), Some((1e-6, Some(0.0))), 2 * MS);
+    let results = orbe_engine::simulate_steps(
+        &netlist::parse(&serde_json::to_vec(&with_cap).unwrap()).unwrap(),
+    );
+    let errors: Vec<_> = results
+        .diagnostics()
+        .iter()
+        .filter(|d| d.severity() == orbe_engine::diagnostic::Severity::Error)
+        .collect();
+    assert!(errors.is_empty(), "max7219 draw with cap: {errors:?}");
+    let vcc = column(&results, "#net.vcc");
+    let (peaks, troughs) = extrema(&vcc);
+    assert!(
+        peaks.len() >= 5 && troughs.len() >= 5,
+        "max7219 expected clean oscillation, got {} peaks and {} troughs",
+        peaks.len(),
+        troughs.len()
+    );
+    for &p in &peaks {
+        assert!(
+            (p - 2.00).abs() < 1e-3,
+            "max7219 peak {p} V not near 2.00 V"
+        );
+    }
+    for &t in &troughs {
+        assert!(
+            (t - 1.80).abs() < 1e-3,
+            "max7219 trough {t} V not near 1.80 V"
+        );
+    }
+}
+
+/// A lit WS2812 (with no DOUT, so its supply gate comes from `draw` alone) whose channel draw
+/// pulls VCC below release (2.7 V) while releasing to its idle draw lets VCC rise above 3.0 V
+/// reports `chip.unsettled` promptly on a capacitorless step.
+#[test]
+fn ws2812_lit_draw_without_cap_reports_unsettled() {
+    // 24 '1' bits (0xFFFFFF, full white = 36 mA channel + 1 mA idle = 37 mA), then 300 us low to
+    // latch while VCC = 5 V, then step VCC source to 3.1 V through 20 ohm (37 mA pulls VCC to
+    // ~2.4 V < 2.7 V; 1 mA idle leaves VCC at ~3.08 V > 3.0 V).
+    let mut din_events = Vec::new();
+    let mut t = 10_000_000u64; // 10 us
+    for _ in 0..24 {
+        din_events.push(serde_json::json!({ "t_ps": t, "level": val(5.0, "V") }));
+        t += 700_000; // 700 ns high ('1')
+        din_events.push(serde_json::json!({ "t_ps": t, "level": val(0.0, "V") }));
+        t += 550_000; // 550 ns low
+    }
+    let step_at = t + 400_000_000; // 400 us after last bit -> latched
+    let doc = serde_json::json!({
+        "version": 1,
+        "seed": 0,
+        "analysis": { "transient": {
+            "stop_ps": step_at + MS, "max_step_ps": 100_000_000u64, "grid_ps": 100_000_000u64,
+        } },
+        "ground": "gnd",
+        "nets": ["gnd", "vs", "vcc", "din"],
+        "parts": [
+            source("vs", "vs", serde_json::json!({
+                "kind": "step", "initial": val(5.0, "V"), "final": val(3.1, "V"), "at_ps": step_at,
+            })),
+            resistor("rs", "vs", "vcc", 20.0),
+            source("v_din", "din", serde_json::json!({
+                "kind": "steps", "initial": val(0.0, "V"), "events": din_events,
+            })),
+            {
+                "name": "px",
+                "kind": "ws2812",
+                "leds": 1,
+                "pins": { "VCC": "vcc", "GND": "gnd", "DIN": "din" },
+                "input_threshold": { "low": val(0.3, "1"), "high": val(0.7, "1") },
+                "min_supply": val(3.0, "V"),
+                "draw": {
+                    "channel_current": val(0.012, "A"),
+                    "idle_current": val(0.001, "A"),
+                    "holds_above": val(3.0, "V"),
+                },
+            },
+        ],
+    });
+    let (res, stats) =
+        orbe_engine::simulate_stats(&netlist::parse(&serde_json::to_vec(&doc).unwrap()).unwrap());
+    let codes: Vec<_> = res.diagnostics().iter().map(|d| d.code()).collect();
+    assert_eq!(codes, ["chip.unsettled"], "ws2812 lit draw without cap");
+    assert!(
+        stats.landings < 500,
+        "ws2812 inconsistent draw must stop at the edge, took {} landings",
+        stats.landings
+    );
+}

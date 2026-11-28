@@ -2500,7 +2500,12 @@ impl Gauge {
             ground += own;
         }
         if let Some((vcc, gnd)) = self.draw {
-            let (amps, _) = core.draw().at(row[vcc].get() - row[gnd].get());
+            let draw = if released {
+                core.released_draw()
+            } else {
+                core.draw()
+            };
+            let (amps, _) = draw.at(row[vcc].get() - row[gnd].get());
             supply += amps;
             ground += amps;
         }

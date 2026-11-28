@@ -153,7 +153,7 @@
     },
     {
       "what": "supply voltage",
-      "why": "Section 8 lists VDD from +3.7 V to +5.5 V and states no under-voltage floor. Below 3.7 V the part warns `rating.supply_low` and its draw fades toward 0 A at 0 V (97% at 3.3 V). Below 3.0 V the pixel ignores DIN, clears to off (leaving only the faded idle draw) and releases DOUT, and recovers from the next full frame once VDD returns. Section 9 also names SK6805MINI-HS at 5 mA, and the draw is the 12 mA SK6812MINI-HS."
+      "why": "Section 8 lists VDD from +3.7 V to +5.5 V and states no under-voltage floor. Below 3.7 V the part warns `rating.supply_low` and its draw fades toward 0 A at 0 V (97% at 3.3 V). The pixel powers up once VDD rises to 3.0 V, and ignores DIN, clears to off (leaving only the faded idle draw) and releases DOUT once VDD falls below 2.7 V (90% of 3.0 V, an estimate), recovering from the next full frame once VDD returns to 3.0 V. Section 9 also names SK6805MINI-HS at 5 mA, and the draw is the 12 mA SK6812MINI-HS."
     },
     {
       "what": "bit times",

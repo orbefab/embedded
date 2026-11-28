@@ -197,7 +197,8 @@ fn unpowered_part_does_nothing_and_draws_nothing() {
     bench.pulse();
     bench.bus(true, b'A');
     bench.pulse();
-    assert_eq!(bench.dev.draw().amps, 0.0);
+    assert_eq!(bench.dev.released_draw().amps, 0.0);
+    assert!((bench.dev.draw().amps - 350e-6).abs() < 1e-12);
     assert!(!text_visible(&bench.panel()));
     assert_eq!(bench.dev.ddram()[0], 0x20);
     assert_eq!(bench.broke, Vec::<&str>::new());
@@ -424,7 +425,7 @@ fn the_backlight_lights_from_its_led_without_the_controller_supply() {
     assert!(!text_visible(&bench.panel()));
     let pixels = glass(&bench.panel(), display::frame(bench.dev.view()));
     assert_eq!(&pixels[..4], &[16, 84, 180, 255], "the glass glows blue");
-    assert_eq!(bench.dev.draw().amps, 0.0);
+    assert_eq!(bench.dev.released_draw().amps, 0.0);
     bench.set(WATCH_BACKLIGHT, false);
     assert!(!backlight_on(&bench.panel()));
 }

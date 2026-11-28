@@ -311,6 +311,16 @@ impl Core {
         }
     }
 
+    /// What its device draws from its supply while its supply gate is off.
+    pub(crate) fn released_draw(&self) -> Draw {
+        match *self {
+            Core::Device(ref core) => core.released_draw(),
+            Core::Mcu(_) | Core::Net(_) => Draw::NONE,
+            #[cfg(test)]
+            Core::Script(_) => Draw::NONE,
+        }
+    }
+
     /// Whether each output pulls down, in the order of its image, or empty when none does. Only a
     /// microcontroller says so, and only at a stop.
     pub(crate) fn pulled_down(&self) -> &[bool] {
@@ -632,26 +642,31 @@ pub(crate) enum Powered {
     On,
 }
 
-/// The watch whose level is [`Powered`] for a chip with outputs and a minimum supply, from its
-/// rails' `V(VCC) - V(GND)`: high once that rises to the minimum, low once it falls below the
-/// release supply. `None` for a chip that drives at any supply.
+/// The watch whose level is [`Powered`] for a chip with outputs or a draw and a minimum supply,
+/// from its rails' `V(VCC) - V(GND)`: high once that rises to the minimum, low once it falls
+/// below the release supply. `None` for a chip that drives at any supply.
 pub(crate) fn supply_watch(chip: &Chip) -> Option<Watch> {
     let min = chip.core.min_supply_v()?;
-    let output = chip.outputs.first()?;
+    let (vcc, gnd) = chip
+        .outputs
+        .first()
+        .map(|output| (output.vcc, output.gnd))
+        .or(chip.draw)?;
     debug_assert!(
         chip.outputs
             .iter()
-            .all(|other| (other.vcc, other.gnd) == (output.vcc, output.gnd)),
+            .all(|other| (other.vcc, other.gnd) == (vcc, gnd)),
         "a chip's outputs share its rails"
+    );
+    debug_assert!(
+        chip.draw.is_none_or(|draw| draw == (vcc, gnd)),
+        "a chip's draw shares its rails"
     );
     let release = chip.core.release_supply_v().unwrap_or(min);
     debug_assert!(release <= min, "a chip releases at or below its minimum");
     let margin = SUPPLY_BOUND_INSIDE_V.min(0.25 * release);
     let supply = |volts: f64| Signal {
-        terms: vec![
-            (Node::from(output.vcc), 1.0),
-            (Node::from(output.gnd), -1.0),
-        ],
+        terms: vec![(Node::from(vcc), 1.0), (Node::from(gnd), -1.0)],
         offset: volts - margin,
     };
     Some(Watch {
@@ -662,7 +677,8 @@ pub(crate) fn supply_watch(chip: &Chip) -> Option<Watch> {
 
 /// The drops are sources, so they scale. A device's draw is linearised at `x`, the iterate:
 /// its current there, and its slope as a conductance. A `released` chip, whose supply gate is
-/// [`Powered::Off`], stamps no stage: its [`Core::drive`] image stays, and the pins are released.
+/// [`Powered::Off`], stamps [`Core::released_draw`] and no output stage: its [`Core::drive`]
+/// image stays, and the pins are released.
 pub(crate) fn stamp(
     chip: &Chip,
     core: &Core,
@@ -678,7 +694,12 @@ pub(crate) fn stamp(
     }
     if let Some((vcc, gnd)) = chip.draw {
         let volts = x.voltage(vcc) - x.voltage(gnd);
-        let (amps, slope) = core.draw().at(volts);
+        let draw = if released {
+            core.released_draw()
+        } else {
+            core.draw()
+        };
+        let (amps, slope) = draw.at(volts);
         sys.conductance(vcc, gnd, slope);
         sys.current(vcc, gnd, amps - slope * volts);
     }

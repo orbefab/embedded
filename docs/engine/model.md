@@ -19,7 +19,8 @@ Equal generations mean equal pages only between a state and a copy made before o
 | `new(params)` | Builds the device from its part's logic params, at power-on. Electrical params stay in the engine. |
 | `run_until(cx, limit)` | Runs from the last time it reached. Returns the first stop in `(reached, limit]` where its drives may change or it samples, or `None` once it has done everything up to `limit`. A run split at any limit is the same run. |
 | `drive()` | One `Drive` per output it declares, in order: high, low, pull-up or off. |
-| `draw()` | The `Draw` it takes from its supply: `amps` while the supply is at or above `holds_above_v`, fading as `3 x^2 - 2 x^3` of it below, with `x` the supply over `holds_above_v`, to none at 0 V. `Draw::NONE` by default. |
+| `draw()` | The `Draw` it takes from its supply while powered: `amps` while the supply is at or above `holds_above_v`, fading as `3 x^2 - 2 x^3` of it below, with `x` the supply over `holds_above_v`, to none at 0 V. `Draw::NONE` by default. |
+| `released_draw()` | The `Draw` it takes while its supply gate is off, when `min_supply_v()` is `Some`. `Draw::NONE` by default. |
 | `input(cx, at, levels)` | Its watches' levels from `at` on. |
 | `sample(cx, at, volts)` | The volts of its samples at a stop that asked for them. A device with `TRACKS_SUPPLY` is also sampled at every accepted step. |
 | `event(cx, at, event)` | An event it declares, with fields the engine has checked against the declaration. |
@@ -33,7 +34,7 @@ Equal generations mean equal pages only between a state and a copy made before o
 
 The engine lists a part in `observations.json` `leds` only when its device declares an LED chain, and in `displays` only when it declares a screen.
 
-`MIN_SUPPLY_V` is the supply a device's outputs drive from, and `None`, the default, drives at any supply. The host drives the outputs once `V(VCC) - V(GND)` rises to it, and turns them off once it falls below `RELEASE_SUPPLY_V`, until it rises to `MIN_SUPPLY_V` again. `RELEASE_SUPPLY_V` defaults to `MIN_SUPPLY_V`, a band of none. A device whose thresholds come from its part params returns them from `min_supply_v()` and `release_supply_v()`, which the host reads once, at power-on. Its drives still report the logical level while the outputs are off. A device that acts on its supply itself watches it, with the same thresholds when it powers down with its outputs.
+`MIN_SUPPLY_V` is the supply a device powers up from, and `None`, the default, drives at any supply. The host drives the outputs and stamps `draw()` once `V(VCC) - V(GND)` rises to it, and turns them off and stamps `released_draw()` once it falls below `RELEASE_SUPPLY_V`, until it rises to `MIN_SUPPLY_V` again. `RELEASE_SUPPLY_V` defaults to `MIN_SUPPLY_V`, a band of none. A device whose thresholds come from its part params returns them from `min_supply_v()` and `release_supply_v()`, which the host reads once, at power-on. Its drives and draw still report the powered levels while the gate is off. A device that acts on its supply itself watches it, with the same thresholds when it powers down with its gate.
 
 Only `run_until` changes the drives. Any call may change the draw. The host stamps the draw it read at the last stop, and a change from another call takes effect at a stop the host adds 1 ps after it. `input`, `sample`, `event`, and every call of a role, such as `write` or `pulse`, leave them alone. What they cause comes at least 1 ps later, at a stop. The engine checks this after each of those calls, in every build, and panics on a device that breaks it.
 

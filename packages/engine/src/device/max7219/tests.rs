@@ -252,12 +252,13 @@ fn open_iset_and_unpowered_blank_the_display() {
         assert!(frame_of(&chip)[0] > 0, "vcc={vcc}");
     }
 
-    // Below 1.8 V release floor: resets, blanks, draws nothing.
+    // Below 1.8 V release floor: resets, blanks, and the host stamps released_draw (0 A).
     chip.sample(&mut cx, at(t + 2 * US), &[1.7, 0.0]);
     chip.input(&mut cx, at(t + 2 * US), levels(false, false, false, false));
     assert_eq!(chip.digits()[0], 0x00);
     assert_eq!(frame_of(&chip), [0; 64]);
-    assert_eq!(chip.draw().amps, 0.0);
+    assert_eq!(chip.released_draw().amps, 0.0);
+    assert!((chip.draw().amps - 150e-6).abs() < 1e-9);
 }
 
 #[test]

@@ -267,11 +267,7 @@ impl Device for Hd44780 {
 
     fn draw(&self) -> Draw {
         Draw {
-            amps: if self.controller.powered() {
-                self.logic_amps
-            } else {
-                0.0
-            },
+            amps: self.logic_amps,
             holds_above_v: self.holds_above_v,
         }
     }
