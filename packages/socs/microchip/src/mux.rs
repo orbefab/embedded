@@ -878,10 +878,8 @@ mod tests {
         pins: &'a mut VecDeque<crate::PinReport>,
         pending: &'a mut Vec<crate::PinReport>,
         overflow: &'a mut u64,
-        logs: &'a mut Vec<crate::IoWrite>,
-        drops: &'a mut u64,
     ) -> Ctx<'a> {
-        Ctx::new(pins, pending, overflow, logs, drops, &Epochs::START)
+        Ctx::new(pins, pending, overflow, &Epochs::START)
     }
 
     #[test]
@@ -890,15 +888,7 @@ mod tests {
         let mut pins = VecDeque::new();
         let mut pending = Vec::new();
         let mut overflow = 0u64;
-        let mut logs = Vec::new();
-        let mut drops = 0u64;
-        let mut ctx = ctx(
-            &mut pins,
-            &mut pending,
-            &mut overflow,
-            &mut logs,
-            &mut drops,
-        );
+        let mut ctx = ctx(&mut pins, &mut pending, &mut overflow);
         mux.drive(5, Level::High, &mut ctx, 3);
         let edges = mux.take_edges();
         assert_eq!(

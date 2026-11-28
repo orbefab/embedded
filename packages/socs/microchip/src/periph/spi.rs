@@ -49,7 +49,7 @@ use crate::Port;
 use crate::bus::Epochs;
 use crate::chip::SpiCfg;
 use crate::mux::{DriveSource, PinMux};
-use crate::periph::{Ctx, Gate, IoWrite, Touch};
+use crate::periph::{Ctx, Gate, Touch};
 
 use crate::regs::{SPCR as REG_SPCR, SPDR as REG_SPDR, SPSR as REG_SPSR};
 
@@ -380,14 +380,10 @@ impl Spi {
         let mut pins = VecDeque::new();
         let mut pending = Vec::new();
         let mut overflow = 0u64;
-        let mut logs: Vec<IoWrite> = Vec::new();
-        let mut drops = 0u64;
         let mut ctx = Ctx::new(
             &mut pins,
             &mut pending,
             &mut overflow,
-            &mut logs,
-            &mut drops,
             // Nothing on this path stamps a USART frame, so these divisions are never read.
             &Epochs::START,
         );

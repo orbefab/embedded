@@ -5,7 +5,7 @@
 
 use super::Bus;
 use super::domain_running;
-use crate::chip::{ASSR_ADDR, ClockDomain, WAKE_CLASS, WAKE_MASK, WakeClass};
+use crate::chip::{ClockDomain, WAKE_CLASS, WAKE_MASK, WakeClass};
 use crate::periph::Device;
 
 /// CPU cycles to oscillator cycles from one `CLKPR` division on.
@@ -94,9 +94,6 @@ impl Bus {
         };
         if mode == crate::periph::system::SleepMode::Reserved {
             return false;
-        }
-        if mode == crate::periph::system::SleepMode::PowerSave && self.timer_as2() {
-            self.log(ASSR_ADDR, 1 << 5);
         }
         self.latch_bod_off();
         self.apply_sleep_clocks(mode.io_clock(), mode.adc_clock());
@@ -203,7 +200,6 @@ impl Bus {
         if let Some(ee) = self.eeprom_mut() {
             ee.set_cpu_hz(hz);
         }
-        self.set_twi_hz(hz);
     }
 
     pub(crate) fn set_osc_hz(&mut self, hz: u32) {
@@ -215,7 +211,6 @@ impl Bus {
         if let Some(ee) = self.eeprom_mut() {
             ee.set_cpu_hz(cpu);
         }
-        self.set_twi_hz(cpu);
     }
 
     pub(crate) fn cpu_hz(&self) -> u32 {
@@ -329,18 +324,6 @@ impl Bus {
         self.system().map(|sys| sys.mode())
     }
 
-    fn timer_as2(&self) -> bool {
-        self.index.timers[..usize::from(self.index.timer_n)]
-            .iter()
-            .flatten()
-            .any(|slot| {
-                matches!(
-                    self.devices.get(usize::from(*slot)),
-                    Some(Device::Timer(timer)) if timer.as2()
-                )
-            })
-    }
-
     pub(super) fn poll_wdt_reset(&mut self) -> bool {
         self.system_mut().is_some_and(|sys| sys.take_wdt_reset())
     }
@@ -358,15 +341,6 @@ impl Bus {
         if let Some(sys) = self.system_mut() {
             sys.set_cpu_hz(hz);
             sys.rescale(from, old, new);
-        }
-        self.set_twi_hz(hz);
-    }
-
-    fn set_twi_hz(&mut self, hz: u32) {
-        for dev in &mut self.devices {
-            if let Device::Twi(twi) = dev {
-                twi.set_cpu_hz(hz);
-            }
         }
     }
 

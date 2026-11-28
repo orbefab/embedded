@@ -55,6 +55,8 @@ pub struct Fuses {
     pub boot_word: u16,
     /// `WDTON` programmed. The watchdog stays in system-reset mode.
     pub wdton: bool,
+    /// `DWEN` programmed. debugWIRE is enabled and `BREAK` halts the core (Table 28-8).
+    pub dwen: bool,
     /// `RSTDISBL` programmed. `PC6` is an I/O pin, not `RESET` (§14.3.2).
     pub rstdisbl: bool,
     /// Typical `VBOT` in millivolts. `None` when BOD is disabled.
@@ -87,6 +89,7 @@ impl Fuses {
             bootrst: bytes.high & 1 == 0,
             boot_word: boot_word(bootsz),
             wdton: bytes.high & (1 << 4) == 0,
+            dwen: bytes.high & (1 << 6) == 0,
             rstdisbl: bytes.high & (1 << 7) == 0,
             bod_typ_mv: bod_typical_mv(bodlevel),
             startup: startup_of(cksel, sut),

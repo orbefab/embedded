@@ -158,7 +158,6 @@ fn poke_of_rerouted_devices_is_quiet() {
     assert_eq!(cpu.peek(ACSR) & 0x80, 0x80);
     assert_eq!(cpu.peek(DIDR1), 0x03);
     assert_eq!(cpu.take_pin(), None);
-    assert!(cpu.io_writes().is_empty());
 
     // A store reports the pull-up. The following PUD poke must not report
     // its removal.
@@ -172,7 +171,6 @@ fn poke_of_rerouted_devices_is_quiet() {
     pud.insns(2);
     assert_eq!(pud.peek(MCUCR) & 0x10, 0x10);
     assert_eq!(pud.take_pin(), None);
-    assert!(pud.io_writes().is_empty());
 }
 
 /// PB5, PB3, and PB2 are outputs. A poke on the real context reports SS at
@@ -187,7 +185,6 @@ fn poke_of_spi_is_quiet() {
     assert_eq!(cpu.peek(common::DDRB), 0x2C);
     assert_eq!(cpu.peek(SPCR), 0x50);
     assert_eq!(cpu.take_pin(), None);
-    assert!(cpu.io_writes().is_empty());
     assert_eq!(cpu.take(Channel::Spi), None);
     assert_eq!(cpu.take(Channel::Usart0), None);
 }

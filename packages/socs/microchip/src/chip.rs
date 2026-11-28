@@ -1,7 +1,7 @@
 //! The ATmega328P table: sizes, interrupt names, and the devices at each address.
 //!
 //! A device is a [`DeviceSpec`] row. Its registers carry the `SBI`/`CBI` strobe
-//! mask and the unmodeled-bit mask, so another peripheral is another row
+//! mask, so another peripheral is another row
 //! instead of a bus edit. `SPL`/`SPH` reset from RAMEND in the core. `UCSRnC`
 //! resets inside the USART.
 //!
@@ -12,20 +12,19 @@ use crate::periph::acmp::{REG_ACSR, REG_DIDR1};
 use crate::periph::adc::{REG_ADCH, REG_ADCL, REG_ADCSRA, REG_ADCSRB, REG_ADMUX, REG_DIDR0};
 use crate::periph::eeprom::{REG_EEARH, REG_EEARL, REG_EECR, REG_EEDR};
 use crate::periph::system::{
-    PRADC, PRSPI, PRTIM0, PRTIM1, PRTIM2, PRTWI, PRUSART0, REG_CLKPR, REG_MCUSR, REG_OSCCAL,
-    REG_PRR, REG_SMCR, REG_WDTCSR,
+    PRADC, PRSPI, PRTIM0, PRTIM1, PRTIM2, PRTWI, PRUSART0, REG_CLKPR, REG_GPIOR0, REG_GPIOR1,
+    REG_GPIOR2, REG_MCUSR, REG_OSCCAL, REG_PRR, REG_SMCR, REG_WDTCSR,
 };
-use crate::periph::timer::{TCCRA_UNMODELED, TCCRB_8_UNMODELED, TCCRB_16_UNMODELED, Timer};
+use crate::periph::timer::Timer;
 use crate::periph::{
     AcmpCfg, AdcCfg, EepromCfg, ExtIntCfg, IntLine, PcGroup, REG_EICRA, REG_EICRB, REG_EIFR,
     REG_EIMSK, REG_MCUCR, REG_PCICR, REG_PCIFR, REG_PCMSK0, REG_PCMSK1, REG_PCMSK2, SystemCfg,
 };
 use crate::regs::{
     ASSR, GPIO_DDR, GPIO_PIN, GPIO_PORT, GTCCR, ICR_H, ICR_L, OCR_A, OCR_AH, OCR_B, OCR_BH,
-    OwnedReg, RegBlock, SPCR, SPDR, SPSR, SPSR_UNMODELED, TCCR_A, TCCR_B, TCCR_C, TCNT_H, TCNT_L,
-    TIFR, TIMSK, TWAMR, TWAR, TWBR, TWCR, TWCR_UNMODELED, TWDR, TWSR, UBRRH, UBRRH_UNMODELED,
-    UBRRL, UCSRA, UCSRA_TXC_STROBE, UCSRB, UCSRC, UCSRC_UMSEL_UNMODELED, UDR, owned, push_reg,
-    reg_block,
+    OwnedReg, RegBlock, SPCR, SPDR, SPSR, TCCR_A, TCCR_B, TCCR_C, TCNT_H, TCNT_L, TIFR, TIMSK,
+    TWAMR, TWAR, TWBR, TWCR, TWDR, TWSR, UBRRH, UBRRL, UCSRA, UCSRA_TXC_STROBE, UCSRB, UCSRC, UDR,
+    owned, push_reg, reg_block,
 };
 
 /// Where a pin function is wired.
@@ -281,17 +280,17 @@ const fn port_cfg(port: Port, pin: u16) -> PortCfg {
     PortCfg {
         port,
         regs: [
-            owned(pin, GPIO_PIN, 0xFF, 0),
-            owned(pin + 1, GPIO_DDR, 0, 0),
-            owned(pin + 2, GPIO_PORT, 0, 0),
+            owned(pin, GPIO_PIN, 0xFF),
+            owned(pin + 1, GPIO_DDR, 0),
+            owned(pin + 2, GPIO_PORT, 0),
         ],
     }
 }
 
-/// `TSM`, `PSRASY`, and `PSRSYNC` are modeled. The other bits are logged.
+/// `TSM`, `PSRASY`, and `PSRSYNC` are modeled. Reserved bits read as zero (§17.4.1).
 const fn prescaler(addr: u16) -> PrescalerCfg {
     PrescalerCfg {
-        reg: owned(addr, GTCCR, 0, !0x83u8),
+        reg: owned(addr, GTCCR, 0),
     }
 }
 
@@ -313,12 +312,12 @@ const fn usart_cfg(
         udre_vec,
         tx_vec,
         regs: [
-            owned(base, UCSRA, UCSRA_TXC_STROBE, 0),
-            owned(base + 1, UCSRB, 0, 0),
-            owned(base + 2, UCSRC, 0, UCSRC_UMSEL_UNMODELED),
-            owned(base + 4, UBRRL, 0, 0),
-            owned(base + 5, UBRRH, 0, UBRRH_UNMODELED),
-            owned(base + 6, UDR, 0, 0),
+            owned(base, UCSRA, UCSRA_TXC_STROBE),
+            owned(base + 1, UCSRB, 0),
+            owned(base + 2, UCSRC, 0),
+            owned(base + 4, UBRRL, 0),
+            owned(base + 5, UBRRH, 0),
+            owned(base + 6, UDR, 0),
         ],
     }
 }
@@ -327,9 +326,9 @@ const fn usart_cfg(
 const fn spi_328() -> SpiCfg {
     SpiCfg {
         regs: [
-            owned(0x004C, SPCR, 0, 0),
-            owned(0x004D, SPSR, 0, SPSR_UNMODELED),
-            owned(0x004E, SPDR, 0, 0),
+            owned(0x004C, SPCR, 0),
+            owned(0x004D, SPSR, 0),
+            owned(0x004E, SPDR, 0),
         ],
         ss: OcPin {
             port: Port::B,
@@ -356,12 +355,12 @@ const fn spi_328() -> SpiCfg {
 const fn twi_328() -> TwiCfg {
     TwiCfg {
         regs: [
-            owned(0x00B8, TWBR, 0, 0),
-            owned(0x00B9, TWSR, 0, 0),
-            owned(0x00BA, TWAR, 0, 0),
-            owned(0x00BB, TWDR, 0, 0),
-            owned(0x00BC, TWCR, 0, TWCR_UNMODELED),
-            owned(0x00BD, TWAMR, 0, 0),
+            owned(0x00B8, TWBR, 0),
+            owned(0x00B9, TWSR, 0),
+            owned(0x00BA, TWAR, 0),
+            owned(0x00BB, TWDR, 0),
+            owned(0x00BC, TWCR, 0),
+            owned(0x00BD, TWAMR, 0),
         ],
         sda: OcPin {
             port: Port::C,
@@ -380,17 +379,14 @@ const fn twi_328() -> TwiCfg {
 /// digital pad (TQFP / VQFN, §1.1.9).
 const fn adc_328() -> AdcCfg {
     let mut regs = reg_block();
-    // Writes to the data registers are ignored. Every bit is logged.
-    push_reg(&mut regs, owned(0x0078, REG_ADCL, 0, 0xFF));
-    push_reg(&mut regs, owned(0x0079, REG_ADCH, 0, 0xFF));
+    // Writes to the data registers are ignored.
+    push_reg(&mut regs, owned(0x0078, REG_ADCL, 0));
+    push_reg(&mut regs, owned(0x0079, REG_ADCH, 0));
     // `ADIF` is write-one-to-clear (§24.9.2).
-    push_reg(&mut regs, owned(0x007A, REG_ADCSRA, 0x10, 0));
-    // Bits 7 and 5:3 are reserved (§24.9.4).
-    push_reg(&mut regs, owned(0x007B, REG_ADCSRB, 0, 0xB8));
-    // Bit 4 is reserved (§24.9.1).
-    push_reg(&mut regs, owned(0x007C, REG_ADMUX, 0, 0x10));
-    // Bits 7:6 are reserved (§24.9.5).
-    push_reg(&mut regs, owned(0x007E, REG_DIDR0, 0, 0xC0));
+    push_reg(&mut regs, owned(0x007A, REG_ADCSRA, 0x10));
+    push_reg(&mut regs, owned(0x007B, REG_ADCSRB, 0));
+    push_reg(&mut regs, owned(0x007C, REG_ADMUX, 0));
+    push_reg(&mut regs, owned(0x007E, REG_DIDR0, 0));
     AdcCfg {
         vec: 22,
         pin: [8, 9, 10, 11, 12, 13, 0xFF, 0xFF],
@@ -402,12 +398,10 @@ const fn adc_328() -> AdcCfg {
 /// 1 KiB. `EEAR9:8` are the only high bits (§8.6.1). Vector 23 is Table 12-6.
 const fn eeprom_328() -> EepromCfg {
     let mut regs = reg_block();
-    // Bits 7:2 are reserved.
-    push_reg(&mut regs, owned(0x0042, REG_EEARH, 0, 0xFC));
-    push_reg(&mut regs, owned(0x0041, REG_EEARL, 0, 0));
-    push_reg(&mut regs, owned(0x0040, REG_EEDR, 0, 0));
-    // Bits 7:6 are reserved (§8.6.3).
-    push_reg(&mut regs, owned(0x003F, REG_EECR, 0, 0xC0));
+    push_reg(&mut regs, owned(0x0042, REG_EEARH, 0));
+    push_reg(&mut regs, owned(0x0041, REG_EEARL, 0));
+    push_reg(&mut regs, owned(0x0040, REG_EEDR, 0));
+    push_reg(&mut regs, owned(0x003F, REG_EECR, 0));
     EepromCfg {
         bytes: 1024,
         vec: 23,
@@ -415,19 +409,20 @@ const fn eeprom_328() -> EepromCfg {
     }
 }
 
-/// `SMCR`, `MCUSR`, `WDTCSR`, `CLKPR`, `PRR`, `OSCCAL`. `WDT` is vector 7.
+/// `SMCR`, `MCUSR`, `WDTCSR`, `CLKPR`, `PRR`, `OSCCAL`, `GPIOR0`–`GPIOR2`. `WDT` is vector 7.
 const fn system_328() -> SystemCfg {
     let mut regs = reg_block();
-    // Bits 7:4 are reserved (§10.11.1, §11.9.1).
-    push_reg(&mut regs, owned(0x0053, REG_SMCR, 0, 0xF0));
-    push_reg(&mut regs, owned(0x0054, REG_MCUSR, 0, 0xF0));
+    push_reg(&mut regs, owned(0x0053, REG_SMCR, 0));
+    push_reg(&mut regs, owned(0x0054, REG_MCUSR, 0));
     // `WDIF` is write-one-to-clear (§11.9.2). The address is above `OUT`.
-    push_reg(&mut regs, owned(0x0060, REG_WDTCSR, 0x80, 0));
-    // Bits 6:4 are reserved (§9.12.2).
-    push_reg(&mut regs, owned(0x0061, REG_CLKPR, 0, 0x70));
-    // Bit 4 is reserved (§10.11.3).
-    push_reg(&mut regs, owned(0x0064, REG_PRR, 0, 0x10));
-    push_reg(&mut regs, owned(0x0066, REG_OSCCAL, 0, 0));
+    push_reg(&mut regs, owned(0x0060, REG_WDTCSR, 0x80));
+    push_reg(&mut regs, owned(0x0061, REG_CLKPR, 0));
+    push_reg(&mut regs, owned(0x0064, REG_PRR, 0));
+    push_reg(&mut regs, owned(0x0066, REG_OSCCAL, 0));
+    // §8.6.4–§8.6.6. General-purpose I/O registers.
+    push_reg(&mut regs, owned(0x003E, REG_GPIOR0, 0));
+    push_reg(&mut regs, owned(0x004A, REG_GPIOR1, 0));
+    push_reg(&mut regs, owned(0x004B, REG_GPIOR2, 0));
     SystemCfg { wdt_vec: 7, regs }
 }
 
@@ -435,9 +430,8 @@ const fn system_328() -> SystemCfg {
 const fn acmp_328() -> AcmpCfg {
     let mut regs = reg_block();
     // `ACI` is write-one-to-clear (§23.3.2).
-    push_reg(&mut regs, owned(0x0050, REG_ACSR, 0x10, 0));
-    // Bits 7:2 are reserved (§23.3.3).
-    push_reg(&mut regs, owned(0x007F, REG_DIDR1, 0, 0xFC));
+    push_reg(&mut regs, owned(0x0050, REG_ACSR, 0x10));
+    push_reg(&mut regs, owned(0x007F, REG_DIDR1, 0));
     AcmpCfg {
         vec: 24,
         ain0: 22,
@@ -473,16 +467,15 @@ const fn timer8(
 ) -> TimerCfg {
     let flags = Timer::flag_mask_for(false);
     let mut regs = reg_block();
-    push_reg(&mut regs, owned(tccra, TCCR_A, 0, TCCRA_UNMODELED));
-    push_reg(&mut regs, owned(tccra + 1, TCCR_B, 0, TCCRB_8_UNMODELED));
-    push_reg(&mut regs, owned(tccra + 2, TCNT_L, 0, 0));
-    push_reg(&mut regs, owned(tccra + 3, OCR_A, 0, 0));
-    push_reg(&mut regs, owned(tccra + 4, OCR_B, 0, 0));
-    push_reg(&mut regs, owned(timsk, TIMSK, 0, !flags));
-    push_reg(&mut regs, owned(tifr, TIFR, flags, !flags));
+    push_reg(&mut regs, owned(tccra, TCCR_A, 0));
+    push_reg(&mut regs, owned(tccra + 1, TCCR_B, 0));
+    push_reg(&mut regs, owned(tccra + 2, TCNT_L, 0));
+    push_reg(&mut regs, owned(tccra + 3, OCR_A, 0));
+    push_reg(&mut regs, owned(tccra + 4, OCR_B, 0));
+    push_reg(&mut regs, owned(timsk, TIMSK, 0));
+    push_reg(&mut regs, owned(tifr, TIFR, flags));
     if assr != 0 {
-        // Busy bits are not the asynchronous clock select.
-        push_reg(&mut regs, owned(assr, ASSR, 0, !0x60u8));
+        push_reg(&mut regs, owned(assr, ASSR, 0));
     }
     TimerCfg {
         width: TimerWidth::Eight,
@@ -533,22 +526,19 @@ const fn timer16(
     let capture = pins.capt != 0;
     let flags = Timer::flag_mask_for(capture);
     let mut rows = reg_block();
-    push_reg(&mut rows, owned(regs.tccra, TCCR_A, 0, TCCRA_UNMODELED));
-    push_reg(
-        &mut rows,
-        owned(regs.tccra + 1, TCCR_B, 0, TCCRB_16_UNMODELED),
-    );
-    push_reg(&mut rows, owned(regs.tccra + 2, TCCR_C, 0, 0));
-    push_reg(&mut rows, owned(regs.tcnt, TCNT_L, 0, 0));
-    push_reg(&mut rows, owned(regs.tcnt + 1, TCNT_H, 0, 0));
-    push_reg(&mut rows, owned(regs.icr, ICR_L, 0, 0));
-    push_reg(&mut rows, owned(regs.icr + 1, ICR_H, 0, 0));
-    push_reg(&mut rows, owned(regs.ocr_a, OCR_A, 0, 0));
-    push_reg(&mut rows, owned(regs.ocr_a + 1, OCR_AH, 0, 0));
-    push_reg(&mut rows, owned(regs.ocr_a + 2, OCR_B, 0, 0));
-    push_reg(&mut rows, owned(regs.ocr_a + 3, OCR_BH, 0, 0));
-    push_reg(&mut rows, owned(regs.timsk, TIMSK, 0, !flags));
-    push_reg(&mut rows, owned(regs.tifr, TIFR, flags, !flags));
+    push_reg(&mut rows, owned(regs.tccra, TCCR_A, 0));
+    push_reg(&mut rows, owned(regs.tccra + 1, TCCR_B, 0));
+    push_reg(&mut rows, owned(regs.tccra + 2, TCCR_C, 0));
+    push_reg(&mut rows, owned(regs.tcnt, TCNT_L, 0));
+    push_reg(&mut rows, owned(regs.tcnt + 1, TCNT_H, 0));
+    push_reg(&mut rows, owned(regs.icr, ICR_L, 0));
+    push_reg(&mut rows, owned(regs.icr + 1, ICR_H, 0));
+    push_reg(&mut rows, owned(regs.ocr_a, OCR_A, 0));
+    push_reg(&mut rows, owned(regs.ocr_a + 1, OCR_AH, 0));
+    push_reg(&mut rows, owned(regs.ocr_a + 2, OCR_B, 0));
+    push_reg(&mut rows, owned(regs.ocr_a + 3, OCR_BH, 0));
+    push_reg(&mut rows, owned(regs.timsk, TIMSK, 0));
+    push_reg(&mut rows, owned(regs.tifr, TIFR, flags));
     TimerCfg {
         width: TimerWidth::Sixteen,
         clock: TimerClock::Sync,
@@ -644,39 +634,33 @@ const fn extint_cfg(
     lines: &'static [IntLine],
     groups: &'static [PcGroup],
     mcucr_mask: u8,
-    mcucr_unmodeled: u8,
     eicra_mask: u8,
-    eicra_unmodeled: u8,
     eicrb: u16,
     eicrb_mask: u8,
-    eicrb_unmodeled: u8,
     eimsk_mask: u8,
     eifr_mask: u8,
     pcicr_mask: u8,
     pcifr_mask: u8,
     pcmsk1: u16,
-    pcmsk1_mask: u8,
-    pcmsk1_unmodeled: u8,
     pcmsk2: u16,
 ) -> ExtIntCfg {
     let mut regs = reg_block();
-    push_reg(&mut regs, owned(0x0055, REG_MCUCR, 0, mcucr_unmodeled));
-    push_reg(&mut regs, owned(0x0069, REG_EICRA, 0, eicra_unmodeled));
+    push_reg(&mut regs, owned(0x0055, REG_MCUCR, 0));
+    push_reg(&mut regs, owned(0x0069, REG_EICRA, 0));
     if eicrb != 0 {
-        push_reg(&mut regs, owned(eicrb, REG_EICRB, 0, eicrb_unmodeled));
+        push_reg(&mut regs, owned(eicrb, REG_EICRB, 0));
     }
-    push_reg(&mut regs, owned(0x003D, REG_EIMSK, 0, !eimsk_mask));
-    push_reg(&mut regs, owned(0x003C, REG_EIFR, eifr_mask, !eifr_mask));
-    push_reg(&mut regs, owned(0x0068, REG_PCICR, 0, !pcicr_mask));
-    push_reg(&mut regs, owned(0x003B, REG_PCIFR, pcifr_mask, !pcifr_mask));
-    push_reg(&mut regs, owned(0x006B, REG_PCMSK0, 0, 0));
+    push_reg(&mut regs, owned(0x003D, REG_EIMSK, 0));
+    push_reg(&mut regs, owned(0x003C, REG_EIFR, eifr_mask));
+    push_reg(&mut regs, owned(0x0068, REG_PCICR, 0));
+    push_reg(&mut regs, owned(0x003B, REG_PCIFR, pcifr_mask));
+    push_reg(&mut regs, owned(0x006B, REG_PCMSK0, 0));
     if pcmsk1 != 0 {
-        push_reg(&mut regs, owned(pcmsk1, REG_PCMSK1, 0, pcmsk1_unmodeled));
+        push_reg(&mut regs, owned(pcmsk1, REG_PCMSK1, 0));
     }
     if pcmsk2 != 0 {
-        push_reg(&mut regs, owned(pcmsk2, REG_PCMSK2, 0, 0));
+        push_reg(&mut regs, owned(pcmsk2, REG_PCMSK2, 0));
     }
-    let _ = (eicra_mask, eicrb_mask, pcmsk1_mask, mcucr_mask);
     ExtIntCfg {
         lines,
         groups,
@@ -734,10 +718,9 @@ const GROUPS_328: &[PcGroup] = &[
     },
 ];
 
-/// 328P `MCUCR` read mask is `BODS|BODSE|PUD|IVSEL|IVCE`. Reserved bits log.
+/// 328P `MCUCR` read mask is `BODS|BODSE|PUD|IVSEL|IVCE`. Reserved bits read as zero.
 const EXTINT_328: DeviceSpec = DeviceSpec::ExtInt(extint_cfg(
-    INTS_328, GROUPS_328, 0x73, 0x8C, 0x0F, 0xF0, 0, 0, 0, 0x03, 0x03, 0x07, 0x07, 0x006C, 0x7F,
-    0x80, 0x006D,
+    INTS_328, GROUPS_328, 0x73, 0x0F, 0, 0, 0x03, 0x03, 0x07, 0x07, 0x006C, 0x006D,
 ));
 
 pub(crate) const DEVICES: &[DeviceSpec] = &[
@@ -845,8 +828,6 @@ pub(crate) const SPH: u16 = 0x005E;
 pub(crate) const SREG: u16 = 0x005F;
 /// USART instance behind the host channel `Usart0`.
 pub(crate) const USART0: u8 = 0;
-/// `ASSR`, logged when power-save meets Timer2 `AS2`.
-pub(crate) const ASSR_ADDR: u16 = 0x00B6;
 
 /// Program address of vector `number` (1-based).
 pub(crate) const fn vector_word(number: u8) -> u16 {

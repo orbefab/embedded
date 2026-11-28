@@ -18,6 +18,9 @@ pub(crate) const REG_WDTCSR: u8 = 2;
 pub(crate) const REG_CLKPR: u8 = 3;
 pub(crate) const REG_PRR: u8 = 4;
 pub(crate) const REG_OSCCAL: u8 = 5;
+pub(crate) const REG_GPIOR0: u8 = 6;
+pub(crate) const REG_GPIOR1: u8 = 7;
+pub(crate) const REG_GPIOR2: u8 = 8;
 
 pub(crate) const PORF: u8 = 1 << 0;
 pub(crate) const EXTRF: u8 = 1 << 1;
@@ -135,6 +138,8 @@ pub(crate) struct System {
     prr: u8,
     /// Stored. EEPROM programming stays on Table 8-2's typical (§9.12.1).
     osccal: u8,
+    /// `GPIOR0` to `GPIOR2` (§8.6.4–§8.6.6).
+    gpior: [u8; 3],
     fuses: Fuses,
     wdt_hz: u32,
     /// CPU cycles per oscillator cycle. 1 until `CLKPR` says otherwise.
@@ -167,6 +172,7 @@ impl System {
             clkpr: 0,
             prr: 0,
             osccal: 0,
+            gpior: [0; 3],
             fuses,
             wdt_hz: WDT_HZ_TYPICAL,
             div: 1,
@@ -301,7 +307,15 @@ impl System {
     pub(crate) fn steady(&self, reg: u8) -> bool {
         matches!(
             reg,
-            REG_SMCR | REG_MCUSR | REG_WDTCSR | REG_CLKPR | REG_PRR | REG_OSCCAL
+            REG_SMCR
+                | REG_MCUSR
+                | REG_WDTCSR
+                | REG_CLKPR
+                | REG_PRR
+                | REG_OSCCAL
+                | REG_GPIOR0
+                | REG_GPIOR1
+                | REG_GPIOR2
         )
     }
 
@@ -313,6 +327,9 @@ impl System {
             REG_CLKPR => self.clkpr,
             REG_PRR => self.prr,
             REG_OSCCAL => self.osccal,
+            REG_GPIOR0 => self.gpior[0],
+            REG_GPIOR1 => self.gpior[1],
+            REG_GPIOR2 => self.gpior[2],
             _ => 0,
         }
     }
@@ -346,6 +363,18 @@ impl System {
                 touch.prr = true;
             }
             REG_OSCCAL => self.osccal = value,
+            REG_GPIOR0 => {
+                self.gpior[0] = value;
+                return Touch::default();
+            }
+            REG_GPIOR1 => {
+                self.gpior[1] = value;
+                return Touch::default();
+            }
+            REG_GPIOR2 => {
+                self.gpior[2] = value;
+                return Touch::default();
+            }
             _ => {
                 touch.irq = false;
                 touch.schedule = false;

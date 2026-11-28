@@ -1,11 +1,10 @@
-//! I/O log, memory snapshots, and the device slots.
+//! Memory snapshots, enable windows, and the device slots.
 //!
 //! Sleep and the fuse clocks stay in [`super::power`]. These methods are the
 //! side record a host reads after a run, and the indexes the bus uses to
 //! reach a device without scanning the list.
 
 use super::Bus;
-use crate::IoWrite;
 use crate::periph::Device;
 
 impl Bus {
@@ -98,13 +97,5 @@ impl Bus {
             dev.commit_windows(retire);
         }
         self.note_schedule();
-    }
-
-    pub(super) fn log(&mut self, addr: u16, value: u8) {
-        if self.host.io_writes.len() >= crate::periph::IO_LOG_CAP {
-            self.host.io_drops = self.host.io_drops.wrapping_add(1);
-            return;
-        }
-        self.host.io_writes.push(IoWrite { addr, value });
     }
 }

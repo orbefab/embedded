@@ -83,13 +83,6 @@ fn status(cpu: &Cpu) -> u8 {
     peek(cpu, TWSR) & 0xF8
 }
 
-fn logged(cpu: &Cpu, addr: u16) -> usize {
-    cpu.io_writes()
-        .iter()
-        .filter(|write| write.addr == addr)
-        .count()
-}
-
 fn vector_image() -> Vec<u16> {
     let mut words = vec![0xCFFF];
     words.resize(0x30, 0x0000);
@@ -348,12 +341,8 @@ fn twar_and_twamr_are_stored_and_do_not_wake() {
     poke(&mut cpu, TWAMR, 0x0F);
     assert_eq!(peek(&cpu, TWAR), 0x10);
     assert_eq!(peek(&cpu, TWAMR), 0x0E);
-    assert_eq!(logged(&cpu, TWAR), 1);
-    assert_eq!(logged(&cpu, TWAMR), 1);
     poke(&mut cpu, TWAR, 0x20);
     poke(&mut cpu, TWAMR, 0x22);
-    assert_eq!(logged(&cpu, TWAR), 1);
-    assert_eq!(logged(&cpu, TWAMR), 1);
     assert!(cpu.is_sleeping());
     let later = cpu.cycles() + 100;
     cpu.run_until(later);
@@ -387,12 +376,10 @@ fn start_repeated_start_and_off_table_sources() {
     let sla = go(&mut cpu, TWEA);
     peer.run(&mut cpu, sla + BYTE);
     assert_eq!(status(&cpu), 0x40);
-    // 0x40 has no START row. The write releases this master and is logged once.
+    // 0x40 has no START row. The write releases this master.
     poke(&mut cpu, TWCR, TWINT | TWSTA | TWEN | TWEA);
-    assert_eq!(logged(&cpu, TWCR), 1);
     assert!(!Peer::twi_pulls(&cpu, SDA) && !Peer::twi_pulls(&cpu, SCL));
     poke(&mut cpu, TWCR, TWINT | TWSTA | TWEN | TWEA);
-    assert_eq!(logged(&cpu, TWCR), 1, "the missing-row note is once");
     let again = start_at(&mut cpu);
     peer.run(&mut cpu, again + T);
     assert_eq!(status(&cpu), 0x08);
@@ -561,7 +548,6 @@ fn an_invalid_action_ends_the_frame_with_no_event() {
     let later = cpu.cycles() + BYTE;
     peer.run(&mut cpu, later);
     assert!(pull(&mut cpu).is_empty());
-    assert_eq!(logged(&cpu, TWCR), 1);
     assert_eq!(peek(&cpu, TWCR) & TWSTO, 0);
     assert!(
         !Peer::twi_pulls(&cpu, SCL),
@@ -601,20 +587,14 @@ fn a_busy_twcr_write_stores_bits_and_does_not_start() {
 }
 
 #[test]
-fn an_out_of_spec_period_is_logged_and_still_used() {
+fn an_out_of_spec_period_is_still_used() {
     let mut cpu = bare();
     cpu.load_words(&[0x0000; 64]);
     let mut peer = Peer::new(&mut cpu);
     // T = 16 + 2·2 = 20. 16 MHz / 20 is 800 kHz, above the 400 kHz limit.
     poke(&mut cpu, TWBR, 2);
     poke(&mut cpu, TWBR, 2);
-    assert_eq!(
-        logged(&cpu, TWBR),
-        0,
-        "the check is not on the register write"
-    );
     let at = start_at(&mut cpu);
-    assert_eq!(logged(&cpu, TWBR), 1);
     peer.run(&mut cpu, at + 19);
     assert_eq!(peek(&cpu, TWCR) & TWINT, 0);
     peer.run(&mut cpu, at + 20);
@@ -624,11 +604,6 @@ fn an_out_of_spec_period_is_logged_and_still_used() {
     peer.run(&mut cpu, sla + 9 * 20);
     assert_eq!(status(&cpu), 0x20);
     let again = go(&mut cpu, TWSTA | TWEA);
-    assert_eq!(
-        logged(&cpu, TWBR),
-        1,
-        "one note for the clock, not one per phase"
-    );
     // A repeated START is `T + L`, and `L` is 11 at `T` = 20.
     peer.run(&mut cpu, again + 31);
     assert_eq!(status(&cpu), 0x10);
@@ -767,7 +742,6 @@ fn twi_pads_ignore_ddr_and_read_the_bus() {
     assert_eq!(Port::C.pin_id(4), SDA);
     cpu.drive_pin(SDA, Level::Low);
     assert_eq!(cpu.pin_levels().get(SDA), Some(Level::Low));
-    assert_eq!(logged(&cpu, TWCR), 0, "the TWI reads a host drive");
     cpu.drive_pin(SDA, Level::Released);
     poke(&mut cpu, TWCR, 0);
     poke(&mut cpu, DDRC, 1 << 4);
@@ -874,7 +848,6 @@ fn invalid_stop_at_0x08_clears_twsto() {
     assert_eq!(status(&cpu), 0x08);
     poke(&mut cpu, TWCR, TWINT | TWSTO | TWEN);
     assert_eq!(peek(&cpu, TWCR) & TWSTO, 0);
-    assert_eq!(logged(&cpu, TWCR), 1);
 }
 
 #[test]
@@ -911,23 +884,19 @@ fn twps_scales_the_period() {
     assert_eq!(status(&cpu), 0x08);
 }
 
-/// A `TWSTA` from 0x08 is a row of no table. It is logged once, both lines are
-/// released, and the bus is free because this master owned it. The next START
-/// is not a repeated START.
+/// A `TWSTA` from 0x08 is a row of no table. Both lines are released, and the bus is free
+/// because this master owned it. The next START is not a repeated START.
 #[test]
-fn a_start_from_0x08_releases_and_is_logged_once() {
+fn a_start_from_0x08_releases_the_bus() {
     let mut cpu = machine();
     let mut peer = Peer::new(&mut cpu);
     let at = start_at(&mut cpu);
     peer.run(&mut cpu, at + T);
     assert_eq!(status(&cpu), 0x08);
     assert!(Peer::twi_pulls(&cpu, SCL));
-    assert_eq!(logged(&cpu, TWCR), 0);
     poke(&mut cpu, TWCR, TWINT | TWSTA | TWEN);
-    assert_eq!(logged(&cpu, TWCR), 1);
     assert!(!Peer::twi_pulls(&cpu, SDA) && !Peer::twi_pulls(&cpu, SCL));
     poke(&mut cpu, TWCR, TWINT | TWSTA | TWEN);
-    assert_eq!(logged(&cpu, TWCR), 1);
     let again = start_at(&mut cpu);
     peer.run(&mut cpu, again + T);
     assert_eq!(status(&cpu), 0x08);
@@ -956,7 +925,6 @@ fn an_invalid_write_drops_the_phase_start() {
     peer.pull_at(stray + 2, Line::Sda, false);
     peer.run(&mut cpu, stray + 2);
     poke(&mut cpu, TWCR, TWINT | TWSTO | TWEN);
-    assert_eq!(logged(&cpu, TWCR), 1);
     assert!(!Peer::twi_pulls(&cpu, SDA) && !Peer::twi_pulls(&cpu, SCL));
     let again = start_at(&mut cpu);
     peer.run(&mut cpu, again + T);
@@ -1066,7 +1034,6 @@ fn a_lost_one_reads_0x38_and_the_next_start_waits_for_a_stop() {
     assert!(!Peer::twi_pulls(&cpu, SDA) && !Peer::twi_pulls(&cpu, SCL));
     poke(&mut cpu, TWCR, TWINT | TWEN | TWEA | TWIE);
     assert_eq!(peek(&cpu, TWSR), 0xF8);
-    assert_eq!(logged(&cpu, TWCR), 0, "the release is a Table 22-2 row");
     start_at(&mut cpu);
     let free = peer.release_at();
     peer.run(&mut cpu, free - 1);
@@ -1115,7 +1082,6 @@ fn a_nack_on_a_read_that_reads_low_loses_arbitration() {
     assert!(!Peer::twi_pulls(&cpu, SDA) && !Peer::twi_pulls(&cpu, SCL));
     poke(&mut cpu, TWCR, TWINT | TWEN | TWEA | TWIE);
     assert_eq!(peek(&cpu, TWSR), 0xF8);
-    assert_eq!(logged(&cpu, TWCR), 0, "the release is a Table 22-3 row");
 }
 
 /// A master that drives the read ACK low is sending 0. Another master holding SDA low
@@ -1161,7 +1127,6 @@ fn a_start_inside_a_byte_is_a_bus_error() {
     let edges = peer.edges.len();
     poke(&mut cpu, TWCR, TWINT | TWSTO | TWEN | TWEA | TWIE);
     assert_eq!(peek(&cpu, TWCR) & (TWSTO | TWINT), 0);
-    assert_eq!(logged(&cpu, TWCR), 0);
     peer.run(&mut cpu, sla + 3 * T);
     assert_eq!(peer.edges.len(), edges, "no STOP goes on the bus");
 }
@@ -1196,7 +1161,6 @@ fn an_illegal_write_while_another_master_owns_the_bus_waits() {
     peer.drive(&mut cpu, Line::Sda, true);
     peer.drive(&mut cpu, Line::Scl, true);
     poke(&mut cpu, TWCR, TWINT | TWEN);
-    assert_eq!(logged(&cpu, TWCR), 1);
     assert!(!Peer::twi_pulls(&cpu, SDA) && !Peer::twi_pulls(&cpu, SCL));
     let asked = go(&mut cpu, TWSTA | TWEA);
     peer.run(&mut cpu, asked + L);

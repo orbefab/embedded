@@ -47,9 +47,6 @@ pub struct Refusal {
 /// A register the model keeps without running what it does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Unmodeled {
-    /// `TWAR` holds an address the firmware wrote while `TWCR` has `TWEN` and `TWEA` set: the
-    /// TWI would answer as a slave, and the model has no slave modes.
-    TwiSlave,
     /// A START at a bit rate whose data hold time, `T/16` in the model, is longer than Table
     /// 29-14's 3.45 us maximum, below about 18 kHz.
     TwiHoldTime,
@@ -62,7 +59,6 @@ impl Unmodeled {
     /// The register's name.
     pub fn register(self) -> &'static str {
         match self {
-            Unmodeled::TwiSlave => "TWAR",
             Unmodeled::TwiHoldTime => "TWBR",
             Unmodeled::Osccal => "OSCCAL",
         }
@@ -71,7 +67,6 @@ impl Unmodeled {
     /// The register's data address.
     pub fn address(self) -> u16 {
         match self {
-            Unmodeled::TwiSlave => 0x00BA,
             Unmodeled::TwiHoldTime => 0x00B8,
             Unmodeled::Osccal => 0x0066,
         }
@@ -80,9 +75,8 @@ impl Unmodeled {
     /// One bit per item, so a run notes each once.
     pub(crate) fn bit(self) -> u8 {
         match self {
-            Unmodeled::TwiSlave => 1 << 0,
-            Unmodeled::TwiHoldTime => 1 << 1,
-            Unmodeled::Osccal => 1 << 2,
+            Unmodeled::TwiHoldTime => 1 << 0,
+            Unmodeled::Osccal => 1 << 1,
         }
     }
 }

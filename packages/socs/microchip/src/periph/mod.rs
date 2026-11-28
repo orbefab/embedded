@@ -50,16 +50,6 @@ use crate::mux::PinMux;
 use crate::regs::OwnedReg;
 use crate::{Level, PIN_QUEUE_CAP, PinDrive, PinOrigin, PinReport};
 
-/// A store into I/O space (data addresses 0x0020 through 0x00FF).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct IoWrite {
-    pub addr: u16,
-    pub value: u8,
-}
-
-/// How many diagnostic writes are kept. Further writes increment the dropped count.
-pub const IO_LOG_CAP: usize = 64;
-
 /// GPIO edges still inside the current instruction, before they are stamped.
 pub(crate) const PENDING_PIN_CAP: usize = 8;
 
@@ -200,8 +190,6 @@ pub(crate) struct Ctx<'a> {
     pins: &'a mut VecDeque<PinReport>,
     pending: &'a mut Vec<PinReport>,
     overflow: &'a mut u64,
-    io_writes: &'a mut Vec<IoWrite>,
-    io_drops: &'a mut u64,
     epochs: &'a Epochs,
 }
 
@@ -210,16 +198,12 @@ impl Ctx<'_> {
         pins: &'a mut VecDeque<PinReport>,
         pending: &'a mut Vec<PinReport>,
         overflow: &'a mut u64,
-        io_writes: &'a mut Vec<IoWrite>,
-        io_drops: &'a mut u64,
         epochs: &'a Epochs,
     ) -> Ctx<'a> {
         Ctx {
             pins,
             pending,
             overflow,
-            io_writes,
-            io_drops,
             epochs,
         }
     }
@@ -227,14 +211,6 @@ impl Ctx<'_> {
     /// The oscillator cycle of `cpu_cycle`, the cycle a device is handling now.
     pub(crate) fn oscillator_cycles(&self, cpu_cycle: u64) -> u64 {
         self.epochs.oscillator_cycles(cpu_cycle)
-    }
-
-    pub(crate) fn log(&mut self, addr: u16, value: u8) {
-        if self.io_writes.len() >= IO_LOG_CAP {
-            *self.io_drops = self.io_drops.wrapping_add(1);
-            return;
-        }
-        self.io_writes.push(IoWrite { addr, value });
     }
 
     /// `cycle` is `None` for a store still inside the current instruction.
@@ -380,7 +356,6 @@ impl Device {
         mux: &mut PinMux,
         at: StoreAt,
         clock: &ClockView,
-        addr: u16,
     ) -> Touch {
         let cycle = at.cycle;
         match self {
@@ -389,7 +364,7 @@ impl Device {
                 Touch::default()
             }
             Device::ExtInt(ext) => ext.write(reg, value, mux, ctx, cycle),
-            Device::Timer(timer) => timer.write(reg, value, ctx, mux, at, clock, addr),
+            Device::Timer(timer) => timer.write(reg, value, ctx, mux, at, clock),
             Device::Usart(usart) => usart.write(reg, value, mux, ctx, cycle),
             Device::Spi(spi) => spi.write(reg, value, mux, ctx, cycle),
             Device::Twi(twi) => twi.write(reg, value, mux, ctx, cycle),
@@ -683,7 +658,7 @@ impl Device {
     }
 }
 
-/// Register rows of one chip-table entry. The bus copies `strobe` and `unmodeled`.
+/// Register rows of one chip-table entry. The bus copies `strobe`.
 pub(crate) fn rows_of(spec: &DeviceSpec, out: &mut Vec<OwnedReg>) {
     out.clear();
     match spec {

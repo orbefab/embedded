@@ -240,12 +240,12 @@ const ROWS: &[Row] = &[
     Row::new("SBRS no skip", Words::One(0xFE00), 1),
     Row::new("SBRS skip one word", Words::Two(0xFE00, 0x0000), 2).r0(1),
     Row::new("SBRS skip LDS", Words::Three(0xFE00, 0x9000, 0x0100), 3).r0(1),
-    Row::new("SBIC no skip", Words::One(0x9900), 1).io0(1),
-    Row::new("SBIC skip one word", Words::Two(0x9900, 0x0000), 2),
-    Row::new("SBIC skip CALL", Words::Three(0x9900, 0x940E, 0x0000), 3),
-    Row::new("SBIS no skip", Words::One(0x9B00), 1),
-    Row::new("SBIS skip one word", Words::Two(0x9B00, 0x0000), 2).io0(1),
-    Row::new("SBIS skip JMP", Words::Three(0x9B00, 0x940C, 0x0000), 3).io0(1),
+    Row::new("SBIC no skip", Words::One(0x99F0), 1).io0(1),
+    Row::new("SBIC skip one word", Words::Two(0x99F0, 0x0000), 2),
+    Row::new("SBIC skip CALL", Words::Three(0x99F0, 0x940E, 0x0000), 3),
+    Row::new("SBIS no skip", Words::One(0x9BF0), 1),
+    Row::new("SBIS skip one word", Words::Two(0x9BF0, 0x0000), 2).io0(1),
+    Row::new("SBIS skip JMP", Words::Three(0x9BF0, 0x940C, 0x0000), 3).io0(1),
     // Table 5-5, page 22.
     Row::new("SBI", Words::One(0x9A00), 2),
     Row::new("CBI", Words::One(0x9800), 2),
@@ -330,7 +330,7 @@ fn run(mut cpu: Cpu, words: Words, sreg: u8, r0: u8, r1: u8, io0: u8) -> Cpu {
     cpu.set_sreg(sreg);
     cpu.set_reg(0, r0);
     cpu.set_reg(1, r1);
-    cpu.poke(0x0020, io0);
+    cpu.poke(0x003E, io0);
     cpu.step();
     cpu
 }

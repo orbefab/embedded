@@ -58,7 +58,6 @@ pub use gaps::{Noted, Refusal, Refused, Unmodeled};
 pub use hex::{FLASH_BYTES, HexFault, HexRule, parse_hex};
 pub use periph::twi::{I2cNote, I2cStamp};
 pub use periph::usart::Sent;
-pub use periph::{IO_LOG_CAP, IoWrite};
 pub use timeline::{Halt, Timeline};
 
 /// Ports B, C, and D, eight pins each. [`Port::pin_id`] values are `0..PIN_COUNT`.

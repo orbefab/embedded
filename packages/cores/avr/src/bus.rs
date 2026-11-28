@@ -10,7 +10,8 @@
 //!
 //! Flag writes (`SEI`, `RETI`, the ALU) stay in the core. A data-space read or
 //! write of the `SREG` address is the chip mapping that address onto the core.
-//! `BREAK` sets the core's stopped flag and calls nothing here. The chip reads
+//! `BREAK` asks the bus through [`Bus::on_break`] whether on-chip debug stops
+//! the core or runs it as a `NOP`. The chip reads
 //! [`Core::is_stopped`](crate::Core::is_stopped).
 //!
 //! [`Core::step`](crate::Core::step) and [`Core::run_free`](crate::Core::run_free)
@@ -100,6 +101,20 @@ pub trait Bus {
 
     /// `WDR` ran. The chip restarts its watchdog timer.
     fn watchdog_reset_timer(&mut self);
+
+    /// `SPM` ran at word `pc` on CPU cycle `cycle`. Flash is left unchanged; a chip whose
+    /// boot loader section enables `SPM` refuses it here.
+    fn on_spm(&mut self, pc: u16, cycle: u64) {
+        let _ = (pc, cycle);
+    }
+
+    /// `BREAK` ran at word `pc` on CPU cycle `cycle`. Returns `true` when on-chip debug is
+    /// enabled and the core should enter stopped mode, or `false` when `BREAK` acts as a
+    /// one-cycle `NOP` (DS40002198B `BREAK`).
+    fn on_break(&mut self, pc: u16, cycle: u64) -> bool {
+        let _ = (pc, cycle);
+        true
+    }
 
     /// Stall cycles the instruction that just retired still has to add, then clears them.
     ///

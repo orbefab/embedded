@@ -220,13 +220,7 @@ pub(crate) struct Twi {
     scl: OcPin,
     vec: u8,
     out: VecDeque<I2cStamp>,
-    logged_speed: bool,
-    logged_invalid: bool,
-    logged_twar: bool,
-    logged_twamr: bool,
     twamr: u8,
-    /// CPU clock, so the 400 kHz check is `f_CK / T`.
-    cpu_hz: u32,
 }
 
 impl Twi {
@@ -261,17 +255,8 @@ impl Twi {
             scl: cfg.scl,
             vec: cfg.vec,
             out: VecDeque::new(),
-            logged_speed: false,
-            logged_invalid: false,
-            logged_twar: false,
-            logged_twamr: false,
             twamr: 0,
-            cpu_hz: 16_000_000,
         }
-    }
-
-    pub(crate) fn set_cpu_hz(&mut self, hz: u32) {
-        self.cpu_hz = hz.max(1);
     }
 
     fn running(&self) -> bool {
@@ -429,7 +414,6 @@ impl Twi {
             REG_TWSR => self.twps = value & 0x03,
             REG_TWAR => {
                 self.twar = value;
-                log_once(ctx, &mut self.logged_twar, 0x00BA, value);
             }
             REG_TWDR => {
                 if self.twint {
@@ -447,7 +431,6 @@ impl Twi {
             }
             REG_TWAMR => {
                 self.twamr = value & !1;
-                log_once(ctx, &mut self.logged_twamr, 0x00BD, value);
             }
             _ => {}
         }
@@ -543,9 +526,6 @@ impl Twi {
             self.abort();
             return;
         }
-        if !matches!(action, Action::Invalid) {
-            self.note_speed(ctx);
-        }
         let (_, long, data) = lengths(self.period());
         let byte = |kind, out| Byte {
             kind,
@@ -571,8 +551,6 @@ impl Twi {
             Action::Stop => self.at(Step::StopSda { then_start: false }, at + data),
             Action::StopThenStart => self.at(Step::StopSda { then_start: true }, at + data),
             Action::Invalid => {
-                let value = self.ctrl;
-                log_once(ctx, &mut self.logged_invalid, 0x00BC, value);
                 // One path for every missing row. This master releases its lines.
                 // `busy` clears only when it owned the bus. Otherwise the SDA edge
                 // while SCL is high keeps it.
@@ -948,23 +926,6 @@ impl Twi {
         };
         mux.set_twi_override(self.sda.port, mask, low, ctx, Some(at), at);
     }
-
-    /// Out of spec when `f_SCL = f_CK / T` is above 400 kHz (Table 29-14).
-    /// Checked on the period the phase actually uses, once.
-    fn note_speed(&mut self, ctx: &mut Ctx<'_>) {
-        let period = self.period();
-        if period > 0 && u64::from(self.cpu_hz) > 400_000 * period {
-            log_once(ctx, &mut self.logged_speed, 0x00B8, self.twbr);
-        }
-    }
-}
-
-fn log_once(ctx: &mut Ctx<'_>, flag: &mut bool, addr: u16, value: u8) {
-    if *flag {
-        return;
-    }
-    *flag = true;
-    ctx.log(addr, value);
 }
 
 #[cfg(test)]
