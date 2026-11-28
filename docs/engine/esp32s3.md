@@ -225,3 +225,49 @@ A fault ends the run at the stop that reports it. The run keeps every row and ev
 `packages/engine/tests/firmware/esp32s3/arduino/adc` is a sketch. It calls `analogRead(6)` and `analogReadMilliVolts(6)` at Arduino-ESP32 3.3.12's default attenuation and width, 11 dB and 12 bits (`cores/esp32/esp32-hal-adc.c`), in eight passes of `loop` 10 ms apart, prints `adc <k> raw <raw> mv <mv>` for each and then `ADC DONE`. Both go through IDF's one-shot driver, and the second through its curve-fitting calibration. `packages/engine/scripts/esp32s3-arduino.sh adc` builds it as it builds `console`, and checks the ELF against the SHA-256 it pins. `packages/engine/tests/firmware/esp32s3/arduino/checks/adc/netlist.json` is the circuit of `packages/engine/tests/circuits/esp32s3-adc` with no console, and names the sketch's hashes and the ROM. `packages/engine/scripts/esp32s3-arduino.sh --check adc` rebuilds the sketch, runs that netlist and runs `packages/engine/scripts/esp32s3_arduino_adc.py --check`. Each line must be the IDF probe's 12 dB line for the same circuit: the raw code within 1 of the closed form `esp32s3_adc.py` checks the probe against, and the millivolts IDF's calibration of that code. In the run every line is `raw 1779 mv 1650`, and `ADC DONE` is at about 89.3 ms. The run reaches its stop at 1.1 s. `scripts/check.sh full` runs `packages/engine/scripts/tests/test_esp32s3_arduino_adc.py` and does not build the sketch.
 
 `packages/engine/scripts/esp32s3_touch.py --check <run>` checks a run folder apart from the engine. `traces/serial.csv` must hold `id b4`, then ten `poll f=0` lines, then one `touch` line for each point the run's own `netlist.json` holds down, with `f=1` and that point's X and Y. `packages/engine/scripts/i2c_decode.py --timing-s3 400000` must accept the run, and the bytes on the chip's pins must be those reads. The run must hold no error and no `chip.unmodeled_register` for `FILTER_CFG`, and `manifest.json` must list the ROM, then each flash region with its offset. `packages/engine/scripts/tests/test_esp32s3_touch.py` checks that a good console and bus pass, and that a wrong id, a short poll list, a moved point, a touch line with `f=0`, an error, a `FILTER_CFG` warning and a region without its offset each fail. `scripts/check.sh full` runs the check.
+
+## Differential check against QEMU
+
+`scripts/diff-esp32s3.sh` (implemented in `scripts/diff_esp32s3.py`) is a by-hand pre-release differential check on Linux. It does not run in PR CI or nightly. It boots each covered ESP32-S3 app in both Espressif's QEMU (`qemu-system-xtensa -machine esp32s3 -nographic -display none -nic none`) and `orbe-run`, normalizes only the expected hardware-identity differences, and exits non-zero with a unified diff on any mismatch, panic, abort, watchdog reset, unexpected reboot, or timeout.
+
+### Cache and user-space setup
+
+The script installs no system packages. It caches downloaded artifacts in `${ORBE_DIFF_SIM_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/orbe-diff-sim}` and verifies every download against a pinned SHA-256:
+
+- **QEMU:** Espressif QEMU release `esp-develop-9.2.2-20261109` (`qemu-xtensa-softmmu-esp_develop_9.2.2_20261109-<arch>-linux-gnu.tar.xz` for `x86_64` and `aarch64`).
+- **Second-stage bootloaders:** Arduino-ESP32 `3.3.12` `esp32s3-libs-3.3.12.zip`, from which `bootloader_dio_80m.elf` and `bootloader_qio_80m.elf` are verified and converted into ESP32-S3 flash images (`bootloader_{dio,qio}_80m.bin`).
+- **User-space shared libraries:** If `libSDL2-2.0.so.0` or `libslirp.so.0` is absent from the system and `$CACHE/prefix/lib`, the script compiles fail-loud stub shared libraries into `$CACHE/prefix/lib` with `cc` (headless `-display none -nic none` never invokes either library, and any unexpected call aborts loudly).
+
+For each app, the script builds a merged flash image (4 MB or 16 MB, matching the app image header's flash-size nibble) with the bootloader at `0x0` (flash-size header byte updated and SHA-256 recomputed), `partitions.bin` at `0x8000`, `app.bin` at `0x10000`, and `0xFF` elsewhere.
+
+### Normalization and comparison
+
+- Strips QEMU's ROM and second-stage bootloader banner up through `entry 0x...` (and the bootloader's `W (<n>) rtcinit: o_code calibration fail` line before app start), since `orbe` starts at `call_start_cpu0`.
+- Replaces IDF log timestamps (`I (123)` / `W (123)` / `E (123)` -> `I (<T>)` / `W (<T>)` / `E (<T>)`).
+- Drops `efuse_init: Chip rev:` and `spi_flash: detected chip:` lines, and replaces `silicon revision vX.Y` with `silicon revision v<REV>` only on the ESP-IDF `hello_world` chip-info line (`This is esp32s3 chip with <N> CPU core(s), ..., silicon revision vX.Y, <M>MB embedded|external flash`) so app text containing `silicon revision` is still compared (QEMU reports `v0.0` and `issi` flash; `orbe`'s captured board state reports `v0.2` and `boya` flash).
+- Any panic, `Guru Meditation Error`, `abort()`, `Backtrace:`, watchdog trigger/reset, unexpected second `ESP-ROM:` banner, non-zero `orbe-run` exit, or timeout fails the check.
+- One-shot apps must match line by line after normalization.
+- Periodic apps (`esp32s3-stock-serial` at 100 ms, `esp32s3-stock-servo` at 200 ms, `esp32s3-hello` at 1000 ms) must match line by line on their prefix and overlapping tick sequence, and both QEMU (wall-clock arrival times over a Unix-domain serial socket) and `orbe` (`t_ps` in `traces/serial.csv`) must keep their mean tick period within ±25% of the sketch's nominal period.
+
+### Covered apps
+
+Run `scripts/diff-esp32s3.sh --list` to print the current table. The check covers 15 apps:
+
+- Stock Arduino-ESP32 UART0 sketches under `packages/scene/tests/fixtures/`: `esp32s3-stock-serial`, `esp32s3-stock-blink`, `esp32s3-stock-crypto`, `esp32s3-stock-nvs`, `esp32s3-stock-eeprom`, `esp32s3-stock-littlefs`, `esp32s3-stock-preferences`, `esp32s3-stock-analogwrite`, `esp32s3-stock-fade`, `esp32s3-stock-servo`, `esp32s3-stock-ledcdetach`, `esp32s3-stock-ledcreattach`, `esp32s3-stock-wire`, and `esp32s3-stock-pcnt`.
+- For `esp32s3-stock-preferences`, `orbe`'s netlist ties `GPIO5` to ground to match QEMU's unimplemented IO_MUX (`INPUT_PULLUP` reads LOW in QEMU), so both simulators run both `setup()`'s initial write/read (`prefs count=1 ...`) and `loop()`'s read-modify-write increment (`press count=2`).
+- For `esp32s3-stock-analogwrite`, `fade`, `servo`, `ledcdetach`, `ledcreattach`, and `pcnt`, QEMU does not model LEDC electrical output or PCNT pulse inputs, so only serial output and pacing are compared.
+- The ESP-IDF v5.5.5 `hello_world` app from `packages/engine/tests/circuits/esp32s3-hello` (16 MB QIO flash; `orbe`'s `USB_SERIAL_JTAG` stream compared against QEMU's serial output).
+
+### What it cannot compare (excluded apps)
+
+- **USB-Serial-JTAG CDC and interactive console:** `esp32s3-stock-cdc`, `esp32s3-stock-cdc4`, `esp32s3-timers`, `esp32s3-echo`, `esp32s3-uart`, `esp32s3-pulls`, `esp32s3-encoder`, `esp32s3-ring`, `esp32s3-screen`, `esp32s3-touch`, and `esp32s3-adc` (QEMU's `misc.esp32c3.usb_serial_jtag` is a stub with no chardev or RX/CDC interrupts), plus `esp32s3-dualcore` (IDF multicore app with `CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y`; in QEMU both cores reach FreeRTOS idle, but UART0 output stops after `cpu_start: Multicore app`).
+- **Bare-metal ELF circuits:** `esp32s3-blink` and `esp32s3-pattern` (no flash image or serial output).
+- **SAR ADC and temperature sensor:** `esp32s3-stock-adc`, `esp32s3-stock-rtcio`, and `esp32s3-stock-temp` (unmodeled in QEMU).
+- **RMT:** `esp32s3-stock-rgb`, `esp32s3-stock-neopixel`, `esp32s3-stock-rmtstrip`, and `blocks/devkitc-button-led` (`esp32s3.rmt` is an unimplemented device in QEMU; transmissions block).
+- **Unmodeled LEDC registers:** `esp32s3-stock-tone`, `esp32s3-stock-tonefast`, `esp32s3-stock-tonemelody`, `esp32s3-stock-tonerestart`, `esp32s3-stock-melody`, `esp32s3-stock-ledcfade`, `esp32s3-stock-ledcfadedetach`, `esp32s3-stock-ledcfreq`, `esp32s3-stock-ledcres`, `esp32s3-stock-ledcshared`, and `esp32s3-stock-ledctone` (QEMU has no LEDC peripheral, so register reads return 0 and Arduino `tone()` / `ledcChangeFrequency()` / `ledcWriteTone()` call `abort()`, while `ledcFade()` rejects `target_duty`).
+- **External I2C / GP-SPI devices and bus pull-ups:** `esp32s3-stock-oled`, `esp32s3-stock-wire1`, `esp32s3-stock-wirelong`, `esp32s3-stock-wirenack`, `esp32s3-stock-wirenackother`, `esp32s3-stock-hspi`, and `blocks/devkitc-gy-bmp280` (QEMU has no I2C controller, no GP-SPI2/SPI3 targets, and no bus pull-ups).
+- **GPIO pull-up inputs:** `esp32s3-stock-button` (`esp32s3.iomux` is unimplemented in QEMU, so `INPUT_PULLUP` reads LOW).
+- **Wi-Fi radio:** `esp32s3-stock-station` (`-nic none` has no Wi-Fi radio or access point).
+- **Duplicate `hello_world` fixtures:** `packages/scene/tests/fixtures/esp32s3-devkitc` and `packages/scene/tests/fixtures/esp32s3-hello` carry the exact same `app.bin` and `partitions.bin` as `packages/engine/tests/circuits/esp32s3-hello`.
+
+`packages/engine/scripts/tests/test_diff_esp32s3.py` checks the normalization, panic/watchdog/reboot detection, periodic rate tolerance, timeout handling, and that every ESP32-S3 fixture, circuit, and DevKitC Block in the repo is either covered or listed as excluded.
