@@ -129,6 +129,14 @@ pub(crate) struct Chip {
     pub(crate) core: Core,
 }
 
+impl Chip {
+    /// Whether [`stamp`] reads the iterate: a device [`Draw`] does, and so does
+    /// [`supply_released`] on a chip with outputs and a minimum supply.
+    pub(crate) fn reads_iterate(&self) -> bool {
+        self.draw.is_some() || (!self.outputs.is_empty() && self.core.min_supply_v().is_some())
+    }
+}
+
 /// The nets of a chip's SPI target pins. It takes each `Spi` record whose CS and SCLK are on
 /// these nets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -600,6 +608,23 @@ pub(crate) fn supply_released(core: &Core, vcc: f64, gnd: f64) -> bool {
     core.min_supply_v().is_some_and(|min| {
         let margin = SUPPLY_BOUND_INSIDE_V.min(0.25 * min);
         vcc - gnd < min - margin
+    })
+}
+
+/// Whether any output's [`supply_released`] state differs between `before` (the iterate used to
+/// stamp) and `after` (the solve's solution).
+pub(crate) fn supply_flipped(
+    chip: &Chip,
+    core: &Core,
+    before: &Solution,
+    after: &Solution,
+) -> bool {
+    if core.min_supply_v().is_none() {
+        return false;
+    }
+    chip.outputs.iter().any(|output| {
+        supply_released(core, before.voltage(output.vcc), before.voltage(output.gnd))
+            != supply_released(core, after.voltage(output.vcc), after.voltage(output.gnd))
     })
 }
 

@@ -925,3 +925,98 @@ fn a_chain_with_min_supply_ignores_data_unpowered_releases_dout_and_recovers() {
         "unpowered DOUT should release, got {released} V"
     );
 }
+
+#[test]
+fn operating_point_and_first_sample_drive_dout_with_min_supply_and_no_draw() {
+    let make = |analysis: serde_json::Value| {
+        serde_json::json!({
+            "version": 1,
+            "seed": 0,
+            "analysis": analysis,
+            "ground": "gnd",
+            "nets": ["gnd", "vcc", "dout"],
+            "parts": [
+                {
+                    "name": "vcc",
+                    "kind": "voltage_source",
+                    "pins": { "p": "vcc", "n": "gnd" },
+                    "voltage": { "value": 5.0, "unit": "V" },
+                },
+                {
+                    "name": "r_dout",
+                    "kind": "resistor",
+                    "pins": { "a": "vcc", "b": "dout" },
+                    "resistance": { "value": 10_000.0, "unit": "ohm" },
+                    "ratings": { "power": null },
+                },
+                {
+                    "name": "px1",
+                    "kind": "ws2812",
+                    "leds": 1,
+                    "pins": { "VCC": "vcc", "GND": "gnd", "DIN": "gnd", "DOUT": "dout" },
+                    "input_threshold": {
+                        "low": { "value": 0.3, "unit": "1" },
+                        "high": { "value": 0.7, "unit": "1" },
+                    },
+                    "min_supply": { "value": 3.0, "unit": "V" },
+                    "dout": {
+                        "output": {
+                            "high_drop": { "value": 0.0, "unit": "V" },
+                            "high_resistance": { "value": 50.0, "unit": "ohm" },
+                            "low_drop": { "value": 0.0, "unit": "V" },
+                            "low_resistance": { "value": 50.0, "unit": "ohm" },
+                        },
+                        "delay": { "value": 150_000, "unit": "ps" },
+                    },
+                },
+            ],
+        })
+    };
+    let expected_dout = 5.0 * 50.0 / 10_050.0;
+
+    let op_run = orbe_engine::run(
+        &serde_json::to_vec(&make(serde_json::json!({ "op": {} }))).unwrap(),
+        Timestamp::from_unix_seconds(0),
+    );
+    let op_obs: serde_json::Value =
+        serde_json::from_slice(op_run.folder.file("observations.json").unwrap()).unwrap();
+    let op_dout = op_obs["op"]["#net.dout"].as_f64().unwrap();
+    assert!(
+        (op_dout - expected_dout).abs() < 1e-6,
+        "op DOUT {op_dout} vs {expected_dout}"
+    );
+
+    let tran = make(serde_json::json!({
+        "transient": { "stop_ps": 1_000_000_000u64, "max_step_ps": 100_000_000u64, "grid_ps": 100_000_000u64 }
+    }));
+    let done = orbe_engine::run(
+        &serde_json::to_vec(&tran).unwrap(),
+        Timestamp::from_unix_seconds(0),
+    );
+    let obs: serde_json::Value =
+        serde_json::from_slice(done.folder.file("observations.json").unwrap()).unwrap();
+    assert!((obs["op"]["#net.dout"].as_f64().unwrap() - expected_dout).abs() < 1e-6);
+
+    let index: serde_json::Value =
+        serde_json::from_slice(done.folder.file("traces/index.json").unwrap()).unwrap();
+    let rows = index["rows"].as_u64().unwrap() as usize;
+    let raw = done.folder.file("traces/analog.f64").unwrap();
+    let col = index["analog"]["columns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .position(|entry| entry["ref"] == "#net.dout")
+        .unwrap();
+    let dout: Vec<f64> = raw
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .skip(col * rows)
+        .take(2)
+        .map(|&chunk| f64::from_le_bytes(chunk))
+        .collect();
+    assert!(
+        (dout[0] - expected_dout).abs() < 1e-6 && (dout[1] - expected_dout).abs() < 1e-6,
+        "DOUT trace[0..2] = {dout:?}"
+    );
+}

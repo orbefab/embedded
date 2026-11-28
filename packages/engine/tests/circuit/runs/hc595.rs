@@ -514,3 +514,202 @@ fn logic_traces_name_each_input_and_keep_its_level() {
     assert_eq!(logic["#u1.logic.SRCLK"]["initial"], "low");
     assert_eq!(logic["#u1.logic.SRCLR"]["initial"], "high");
 }
+
+fn trace_samples(folder: &orbe_engine::run_folder::RunFolder, column: &str) -> Vec<f64> {
+    let index: serde_json::Value =
+        serde_json::from_slice(folder.file("traces/index.json").unwrap()).unwrap();
+    let rows = index["rows"].as_u64().unwrap() as usize;
+    let col = index["analog"]["columns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .position(|entry| entry["ref"] == column)
+        .unwrap_or_else(|| panic!("{column} missing from trace index"));
+    let raw = folder.file("traces/analog.f64").unwrap();
+    raw.as_chunks::<8>()
+        .0
+        .iter()
+        .skip(col * rows)
+        .take(rows)
+        .map(|&chunk| f64::from_le_bytes(chunk))
+        .collect()
+}
+
+fn pullup_hc595_netlist(analysis: serde_json::Value, with_diode: bool) -> serde_json::Value {
+    let mut nets = vec!["gnd", "vcc", "qa", "qhp"];
+    let mut parts = vec![
+        source("vcc", "vcc", 5.0),
+        resistor("r_qa", "vcc", "qa", 10_000.0),
+        resistor("r_qhp", "vcc", "qhp", 10_000.0),
+        serde_json::json!({
+            "name": "u1",
+            "kind": "hc595",
+            "pins": {
+                "QB": "gnd", "QC": "gnd", "QD": "gnd", "QE": "gnd", "QF": "gnd", "QG": "gnd", "QH": "gnd",
+                "GND": "gnd", "QHp": "qhp", "SRCLR": "vcc", "SRCLK": "gnd", "RCLK": "gnd",
+                "OE": "gnd", "SER": "gnd", "QA": "qa", "VCC": "vcc",
+            },
+            "output": stage(25.0, 25.0),
+            "serial_output": stage(50.0, 50.0),
+            "input_threshold": { "low": val(0.3, "1"), "high": val(0.7, "1") },
+            "ratings": {
+                "pin_current": val(0.035, "A"),
+                "supply_current": val(0.07, "A"),
+                "input_margin": serde_json::Value::Null,
+                "output_margin": serde_json::Value::Null,
+            },
+        }),
+    ];
+    if with_diode {
+        nets.push("dmid");
+        parts.push(resistor("r_d", "vcc", "dmid", 100_000.0));
+        parts.push(serde_json::json!({
+            "name": "d1",
+            "kind": "diode",
+            "pins": { "anode": "dmid", "cathode": "gnd" },
+            "saturation_current": val(1e-9, "A"),
+            "emission_coefficient": val(1.8, "1"),
+            "series_resistance": val(1.0, "ohm"),
+            "ratings": { "current": null, "reverse_voltage": null, "power": null },
+        }));
+    }
+    serde_json::json!({
+        "version": 1,
+        "seed": 0,
+        "analysis": analysis,
+        "ground": "gnd",
+        "nets": nets,
+        "parts": parts,
+    })
+}
+
+#[test]
+fn operating_point_and_first_sample_drive_outputs_low_without_nonlinear_parts() {
+    let expected_qa = 5.0 * 25.0 / 10_025.0;
+    let expected_qhp = 5.0 * 50.0 / 10_050.0;
+    let transient = serde_json::json!({
+        "transient": { "stop_ps": 1_000_000_000u64, "max_step_ps": 100_000_000u64, "grid_ps": 100_000_000u64 }
+    });
+
+    // Operating-point-only analysis.
+    let op_run = orbe_engine::run(
+        &serde_json::to_vec(&pullup_hc595_netlist(
+            serde_json::json!({ "op": {} }),
+            false,
+        ))
+        .unwrap(),
+        orbe_engine::timestamp::Timestamp::from_unix_seconds(0),
+    );
+    let op_only: serde_json::Value =
+        serde_json::from_slice(op_run.folder.file("observations.json").unwrap()).unwrap();
+    let op_qa = op_only["op"]["#net.qa"].as_f64().unwrap();
+    let op_qhp = op_only["op"]["#net.qhp"].as_f64().unwrap();
+    assert!((op_qa - expected_qa).abs() < 1e-6, "op QA {op_qa}");
+    assert!((op_qhp - expected_qhp).abs() < 1e-6, "op QHp {op_qhp}");
+
+    // Transient operating point (t = 0) and first sample, with and without an unrelated diode.
+    for with_diode in [false, true] {
+        let done = orbe_engine::run(
+            &serde_json::to_vec(&pullup_hc595_netlist(transient.clone(), with_diode)).unwrap(),
+            orbe_engine::timestamp::Timestamp::from_unix_seconds(0),
+        );
+        let obs: serde_json::Value =
+            serde_json::from_slice(done.folder.file("observations.json").unwrap()).unwrap();
+        let qa_op = obs["op"]["#net.qa"].as_f64().unwrap();
+        let qhp_op = obs["op"]["#net.qhp"].as_f64().unwrap();
+        let qa_trace = trace_samples(&done.folder, "#net.qa");
+        let qhp_trace = trace_samples(&done.folder, "#net.qhp");
+        assert!(
+            (qa_op - expected_qa).abs() < 1e-6,
+            "with_diode={with_diode}: op QA {qa_op} vs {expected_qa}"
+        );
+        assert!(
+            (qhp_op - expected_qhp).abs() < 1e-6,
+            "with_diode={with_diode}: op QHp {qhp_op} vs {expected_qhp}"
+        );
+        assert!(
+            (qa_trace[0] - expected_qa).abs() < 1e-6 && (qa_trace[1] - expected_qa).abs() < 1e-6,
+            "with_diode={with_diode}: QA trace[0..2] = {:?}",
+            &qa_trace[..2]
+        );
+        assert!(
+            (qhp_trace[0] - expected_qhp).abs() < 1e-6
+                && (qhp_trace[1] - expected_qhp).abs() < 1e-6,
+            "with_diode={with_diode}: QHp trace[0..2] = {:?}",
+            &qhp_trace[..2]
+        );
+    }
+}
+
+#[test]
+fn a_nonlinear_step_crossing_min_supply_converges_on_the_matching_stamp() {
+    // VCC starts 0.5 uV above the 2.0 V - 1 uV release threshold and falls 0.75 uV in one step
+    // (within Newton's RELTOL * 2 V = 2 uV tolerance, and above the 2.0 V - 2 uV fall watch).
+    // Newton must re-stamp with the released state rather than accepting driven-low outputs.
+    let netlist = serde_json::json!({
+        "version": 1,
+        "seed": 0,
+        "analysis": { "transient": { "stop_ps": 1_000u64, "max_step_ps": 1_000u64, "grid_ps": 1_000u64 } },
+        "ground": "gnd",
+        "nets": ["gnd", "five", "vsrc", "vcc", "qa", "qhp", "dmid"],
+        "parts": [
+            source("five", "five", 5.0),
+            source("vsrc", "vsrc", 1.999_998_0),
+            resistor("r_load", "vsrc", "gnd", 100.0),
+            resistor("r_rc", "vsrc", "vcc", 100.0),
+            {
+                "name": "c_rc",
+                "kind": "capacitor",
+                "pins": { "a": "vcc", "b": "gnd" },
+                "capacitance": val(1e-11, "F"),
+                "initial": val(1.999_999_5, "V"),
+            },
+            resistor("r_qa", "five", "qa", 10_000.0),
+            resistor("r_qhp", "five", "qhp", 10_000.0),
+            resistor("r_d", "five", "dmid", 100_000.0),
+            {
+                "name": "d1",
+                "kind": "diode",
+                "pins": { "anode": "dmid", "cathode": "gnd" },
+                "saturation_current": val(1e-9, "A"),
+                "emission_coefficient": val(1.8, "1"),
+                "series_resistance": val(1.0, "ohm"),
+                "ratings": { "current": null, "reverse_voltage": null, "power": null },
+            },
+            {
+                "name": "u1",
+                "kind": "hc595",
+                "pins": {
+                    "QB": "gnd", "QC": "gnd", "QD": "gnd", "QE": "gnd", "QF": "gnd", "QG": "gnd", "QH": "gnd",
+                    "GND": "gnd", "QHp": "qhp", "SRCLR": "five", "SRCLK": "gnd", "RCLK": "gnd",
+                    "OE": "gnd", "SER": "gnd", "QA": "qa", "VCC": "vcc",
+                },
+                "output": stage(25.0, 25.0),
+                "serial_output": stage(50.0, 50.0),
+                "input_threshold": { "low": val(0.3, "1"), "high": val(0.7, "1") },
+                "ratings": {
+                    "pin_current": val(0.035, "A"),
+                    "supply_current": val(0.07, "A"),
+                    "input_margin": serde_json::Value::Null,
+                    "output_margin": serde_json::Value::Null,
+                },
+            },
+        ],
+    });
+    let done = orbe_engine::run(
+        &serde_json::to_vec(&netlist).unwrap(),
+        orbe_engine::timestamp::Timestamp::from_unix_seconds(0),
+    );
+    let vcc = trace_samples(&done.folder, "#net.vcc");
+    let qa = trace_samples(&done.folder, "#net.qa");
+    let qhp = trace_samples(&done.folder, "#net.qhp");
+    assert!(vcc[0] > 2.0 - 1e-6 && vcc[1] < 2.0 - 1e-6, "vcc = {vcc:?}");
+    assert!(
+        qa[0] < 0.05 && qhp[0] < 0.05,
+        "t=0 driven low: qa={qa:?} qhp={qhp:?}"
+    );
+    assert!(
+        (qa[1] - 5.0).abs() < 1e-4 && (qhp[1] - 5.0).abs() < 1e-4,
+        "t=1ns released: qa={qa:?} qhp={qhp:?}"
+    );
+}
