@@ -39,10 +39,13 @@
 //! is a guess: the MAC encrypts and decrypts CCMP-128 with the key table, as [`keys`] says, a
 //! TSF load sets a timer and a TBTT latch sets a TBTT's start ([`TSF_CONTROL`]), and the MAC's
 //! clock counts microseconds ([`MAC_CLOCK`]). What the model does not run is refused by name: a
-//! cipher other than CCMP-128, a protected Management frame, a coexistence timer turned on
-//! (`coex_timer`), the beacon filter turned on (`beacon_filter`), the interrupt of a TBTT other
-//! than 0 or of a TSF timer's alarm (`tbtt_intr`, `tsf_timer`), any bit of the TSF and TBTT words
-//! that no blob function sets (`tsf_control`, `tbtt_control`, `tbtt_start`, `pwr_intr`), and an
+//! cipher other than CCMP-128, a protected Management frame, a coexistence timer turned on or
+//! forced (`coex_timer`, `coex_force`), the beacon filter turned on (`beacon_filter`), the
+//! interrupt of a TBTT other than 0 or of a TSF timer's alarm (`tbtt_intr`, `tsf_timer`), any bit
+//! of the TSF and TBTT words that no blob function sets (`tsf_control`, `tbtt_control`,
+//! `tbtt_start`, `pwr_intr`), any store to the key table, its crypto words, PLCP1, the beacon
+//! filter or a coexistence timer that no blob function makes (`key_entry`, `key_valid`,
+//! `crypto_control`, `crypto_init`, `tx_plcp1`, `beacon_filter_bits`, `coex_timer_bits`), and an
 //! armed TBTT, where the run ends as `tbtt` ([`Radio::tbtt`]). The driver itself numbers each
 //! frame and sets its Retry bit when it sends it again after an ACK timeout, so the MAC sends the
 //! buffer as it is.
@@ -398,6 +401,16 @@ const STRIDE: u32 = 0x4c;
 const PLCP1_LENGTH: u32 = 0xfff;
 const PLCP1_RATE_SHIFT: u32 = 12;
 const PLCP1_RATE: u32 = 0x1f;
+/// The bits of a PLCP1 word that `mac_tx_set_plcp1` sets beyond the length, the rate and the key
+/// entry ([`keys::PLCP1_SHIFT`]): bit 25 with a rate from 16 to 31, an HT MCS, and bit 29 when
+/// two flags of the driver's frame are set, which `mac_tx_set_htsig` clears again for an HT
+/// frame. That bit 25 marks an HT rate, and that bit 29 changes nothing the model sends, are
+/// guesses. A rate of 16 or more without bit 25 comes from a rate code above 31, which the model
+/// does not run, `tx_rate`. No function sets bits 26 to 28, 30 or 31, or bit 25 with a rate below
+/// 16, and a store that does is refused by name, `tx_plcp1`.
+const PLCP1_HT: u32 = 1 << 25;
+const PLCP1_BITS: u32 = 0x23ff_ffff;
+const HT_RATES: u32 = 0x10;
 /// Queue 0's status word, which `hal_mac_get_txq_pmd` reads. Bits 12 to 15 are the outcome that
 /// `lmacProcessTxComplete` dispatches on: 0 runs `lmacProcessTxSuccess` and 5
 /// `lmacProcessAckTimeout`. Every other bit reads 0, a guess.
@@ -508,12 +521,24 @@ const TSF_LOW: u32 = 0x6003_5018;
 const TSF_HIGH: u32 = 0x6003_501c;
 
 /// The coexistence timers' control words, timer `n`'s at [`COEX_TIMERS`] `+ 8 n`, as the ROM's
-/// `coex_hw_timer_set`, `coex_hw_timer_enable` and `coex_hw_timer_disable` write them. Bit 31 runs
-/// the timer to the alarm `coex_hw_timer_set` writes into the next word from [`MAC_CLOCK`]. The
-/// alarm is not modelled: a store that sets bit 31 is refused by name, `coex_timer`.
+/// `coex_hw_timer_set`, `coex_hw_timer_enable` and `coex_hw_timer_disable` and libcoexist's
+/// `coex_hw_timer_force` and `coex_hw_timer_unforce` write them. Bit 31 runs the timer to the
+/// alarm `coex_hw_timer_set` writes into the next word from [`MAC_CLOCK`]. The alarm is not
+/// modelled: a store that sets bit 31 is refused by name, `coex_timer`. Bit 28 forces the timer's
+/// signal, which is not modelled either, `coex_force`. `coex_hw_timer_set` writes bits 0 to 23, a
+/// 4-bit field in bits 24 to 27 and bit 30, which do nothing while the timer does not run. No
+/// function sets bit 29, and a store that does is refused by name, `coex_timer_bits`.
 const COEX_TIMERS: u32 = 0x6003_50a8;
 const COEX_TIMER_COUNT: u32 = 4;
 const COEX_TIMER_ON: u32 = 1 << 31;
+const COEX_TIMER_FORCE: u32 = 1 << 28;
+const COEX_TIMER_UNSET: u32 = 1 << 29;
+
+/// Whether `mac_tx_set_plcp1` writes a PLCP1 word with `value`'s bits.
+fn plcp1(value: u32) -> bool {
+    let code = (value >> PLCP1_RATE_SHIFT) & PLCP1_RATE;
+    value & !PLCP1_BITS == 0 && (value & PLCP1_HT == 0 || code >= HT_RATES)
+}
 
 /// Whether `addr` is a coexistence timer's control word.
 fn coex_timer(addr: u32) -> bool {
@@ -568,7 +593,8 @@ const TU: u64 = 1024;
 /// to 2, with event bit 15 in [`EVENTS_ENABLE`], and `hal_disable_sta_beacon_filter` off. The
 /// filter, which by `hal_beacon_ie_crc_get` and `hal_beacon_ie_crc_set` compares a CRC of each
 /// beacon's elements, is not modelled: a store that turns it on is refused by name,
-/// `beacon_filter`.
+/// `beacon_filter`. No function sets bits 3 to 31, and a store that does is refused by name,
+/// `beacon_filter_bits`.
 const BEACON_FILTER: u32 = 0x6003_30a0;
 const BEACON_FILTER_ON: u32 = 0x7;
 
@@ -577,7 +603,8 @@ const BEACON_FILTER_ON: u32 = 0x7;
 /// clears it, and the kept word [`keys::VALID`], whose bit `n` those two set and clear and
 /// `hal_crypto_is_key_valid` reads. `wDev_remove_KeyEntry_all_cnx` walks entries 0 to 24 and
 /// `hal_crypto_init` ORs 25 into `0x6003_3840`. The words read the last write, 0 before it, a
-/// guess. [`keys`] lays them out and says how the MAC uses them.
+/// guess. [`keys`] lays them out, says how the MAC uses them, and names the stores the blobs
+/// never make, which are refused ([`keys::refused`]).
 const KEY_TABLE: usize = keys::ENTRIES * keys::WORDS;
 
 /// The key table's word at `addr`, by its index in [`Radio::keys`].
@@ -787,13 +814,16 @@ impl Radio {
     ) -> Store {
         if let Some(at) = key_slot(addr) {
             self.keys[at] = value;
-            return Store::Kept;
+            return keys::refused(addr, value).map_or(Store::Kept, Store::Refused);
         }
         let Some(slot) = Self::slot(addr) else {
             return Store::Unkept;
         };
         self.settle(now);
         let kept = std::mem::replace(&mut self.words[slot], value);
+        if let Some(setting) = keys::refused(addr, value) {
+            return Store::Refused(setting);
+        }
         let starts = |bit: u32| value & bit != 0 && kept & bit == 0;
         match addr {
             EVENTS_CLEAR => self.events &= !value,
@@ -803,10 +833,22 @@ impl Radio {
             RX_RELOAD if value & RX_RELOAD_START != 0 && self.rx_next == 0 && self.rx_last != 0 => {
                 self.rx_next = read_word(self.rx_last + 8, &byte).unwrap_or(0);
             }
+            BEACON_FILTER if value & !BEACON_FILTER_ON != 0 => {
+                return Store::Refused("beacon_filter_bits");
+            }
             BEACON_FILTER if value & BEACON_FILTER_ON != 0 => {
                 return Store::Refused("beacon_filter");
             }
+            _ if coex_timer(addr) && value & COEX_TIMER_UNSET != 0 => {
+                return Store::Refused("coex_timer_bits");
+            }
             _ if coex_timer(addr) && starts(COEX_TIMER_ON) => return Store::Refused("coex_timer"),
+            _ if coex_timer(addr) && starts(COEX_TIMER_FORCE) => {
+                return Store::Refused("coex_force");
+            }
+            _ if Self::queue(addr, PLCP1, STRIDE).is_some() && !plcp1(value) => {
+                return Store::Refused("tx_plcp1");
+            }
             PWR_ENABLE if value & !PWR_BITS != 0 => return Store::Refused("pwr_intr"),
             PWR_ENABLE if value & PWR_TBTT_OTHERS != 0 => return Store::Refused("tbtt_intr"),
             PWR_ENABLE if value & PWR_TSF_TIMERS != 0 => return Store::Refused("tsf_timer"),
@@ -867,7 +909,11 @@ impl Radio {
         }
         let channel = self.channel.ok_or("tx_channel")?;
         let plcp1 = self.word(PLCP1 - STRIDE * queue);
-        let rate = rate((plcp1 >> PLCP1_RATE_SHIFT) & PLCP1_RATE).ok_or("tx_rate")?;
+        let code = (plcp1 >> PLCP1_RATE_SHIFT) & PLCP1_RATE;
+        if (plcp1 & PLCP1_HT != 0) != (code >= HT_RATES) {
+            return Err("tx_rate");
+        }
+        let rate = rate(code).ok_or("tx_rate")?;
         let length = (plcp1 & PLCP1_LENGTH) as usize;
         let psdu = gather(SRAM_DATA | plcp0 & PLCP0_DESCRIPTOR, byte).ok_or("tx_descriptor")?;
         // An MPDU holds at least Frame Control, Duration and Address 1 (9.3.1).
@@ -1593,9 +1639,9 @@ mod tests {
         let mut untuned = Radio::new();
         assert!(write(&mut untuned, PLCP1, 0x31));
         assert_eq!(refused(&mut untuned, 49), Store::Refused("tx_channel"));
-        // The reserved code 4, and MCS 0 with the short guard interval.
-        for code in [0x04, 0x18] {
-            let mut radio = ready(code << PLCP1_RATE_SHIFT | 0x31);
+        // The reserved code 4, MCS 0 with the short guard interval, and MCS 0 without bit 25.
+        for (code, ht) in [(0x04, 0), (0x18, PLCP1_HT), (0x10, 0)] {
+            let mut radio = ready(code << PLCP1_RATE_SHIFT | ht | 0x31);
             assert_eq!(refused(&mut radio, 49), Store::Refused("tx_rate"));
         }
         let mut radio = ready(0x31);
@@ -2063,8 +2109,8 @@ mod tests {
         0x0c, 0x3c, 0x04, 0xd0, 0x19, 0x78, 0x45, 0xce, 0x0b, 0x16, 0xf9, 0x76, 0x23,
     ];
 
-    /// The words the stock station's driver writes for its pairwise key: entry 4, CCMP, bits 21
-    /// and 22, interface 0, key ID 0, for `peer`. Valid, and interface 0's crypto on, as
+    /// The words the stock station's driver writes for its pairwise key: entry 4, CCMP, bits 21,
+    /// 22 and 27, interface 0, key ID 0, for `peer`, or bits 21 to 23 for WEP. Valid, and interface 0's crypto on, as
     /// `hal_crypto_enable` leaves it.
     fn install(radio: &mut Radio, peer: [u8; 6], key: [u8; 16], cipher: u32) {
         let at = keys::KEYS + 40 * 4;
@@ -2074,7 +2120,16 @@ mod tests {
             at,
             u32::from_le_bytes(peer[..4].try_into().unwrap())
         ));
-        assert!(write(radio, at + 4, 0x0860 << 16 | cipher << 18 | high));
+        let kind = if cipher == 1 { 7 } else { 3 };
+        assert_eq!(
+            radio.write(
+                Tick(0),
+                at + 4,
+                1 << 27 | kind << 21 | cipher << 18 | high,
+                |_| None
+            ),
+            Store::Kept
+        );
         for k in 0..4 {
             let word = u32::from_le_bytes(key[4 * k..4 * k + 4].try_into().unwrap());
             assert!(write(radio, at + 8 + 4 * k as u32, word));
@@ -2094,7 +2149,7 @@ mod tests {
         buffer
     }
 
-    /// A protected frame goes on the air under the key entry PLCP1's bits 17 to 21 name, with
+    /// A protected frame goes on the air under the key entry PLCP1's bits 17 to 24 name, with
     /// its ciphertext and MIC over the plaintext and the 8 octets left for the MIC, as the
     /// standard's vector has them. Its PN is the one in the driver's CCMP header.
     #[test]
@@ -2117,14 +2172,14 @@ mod tests {
         );
     }
 
-    /// When the entry PLCP1 names is not in use, the MAC sends nothing. It reports the outcome
-    /// `lmacProcessTxError` hands to `lmacProcessTxseckiderr`, when the frame would have
-    /// started.
+    /// When the entry PLCP1 names is not in use, or is beyond the table, the MAC sends nothing.
+    /// It reports the outcome `lmacProcessTxError` hands to `lmacProcessTxseckiderr`, when the
+    /// frame would have started.
     #[test]
     fn a_protected_frame_without_its_entry_reports_a_key_error_and_is_not_sent() {
         let buffer = protected_buffer();
         let length = buffer.len() as u32;
-        for entry in [4, 5] {
+        for entry in [4, 5, 25, 0x84] {
             let mut radio = ready(entry << keys::PLCP1_SHIFT | length);
             install(&mut radio, VECTOR_HEADER[4..10].try_into().unwrap(), TK, 3);
             if entry == 4 {
@@ -2262,26 +2317,99 @@ mod tests {
         );
     }
 
-    /// Turning on a coexistence timer or the beacon filter is refused by name. Turning either
-    /// off, as the stock station does, is kept.
+    /// Turning on a coexistence timer, forcing it or turning on the beacon filter is refused by
+    /// name. Turning either off, as the stock station does, is kept, and so are the bits
+    /// `coex_hw_timer_set` writes. A bit no blob function sets is refused by name.
     #[test]
     fn a_coexistence_timer_or_the_beacon_filter_turned_on_is_refused() {
-        let mut radio = Radio::new();
         for timer in [COEX_TIMERS, COEX_TIMERS + 16, COEX_TIMERS + 24] {
-            assert_eq!(radio.write(Tick(0), timer, 0, |_| None), Store::Kept);
+            for (value, store) in [
+                (0, Store::Kept),
+                (0x4fff_ffff, Store::Kept),
+                (COEX_TIMER_ON, Store::Refused("coex_timer")),
+                (COEX_TIMER_FORCE, Store::Refused("coex_force")),
+                (1 << 29, Store::Refused("coex_timer_bits")),
+            ] {
+                let mut radio = Radio::new();
+                assert_eq!(
+                    radio.write(Tick(0), timer, value, |_| None),
+                    store,
+                    "{timer:#x} {value:#x}"
+                );
+            }
+        }
+        for (value, store) in [
+            (0, Store::Kept),
+            (7, Store::Refused("beacon_filter")),
+            (1 << 3, Store::Refused("beacon_filter_bits")),
+            (1 << 31, Store::Refused("beacon_filter_bits")),
+        ] {
+            let mut radio = Radio::new();
             assert_eq!(
-                radio.write(Tick(0), timer, COEX_TIMER_ON, |_| None),
-                Store::Refused("coex_timer")
+                radio.write(Tick(0), BEACON_FILTER, value, |_| None),
+                store,
+                "{value:#x}"
             );
         }
-        assert_eq!(
-            radio.write(Tick(0), BEACON_FILTER, 0, |_| None),
-            Store::Kept
-        );
-        assert_eq!(
-            radio.write(Tick(0), BEACON_FILTER, 7, |_| None),
-            Store::Refused("beacon_filter")
-        );
+    }
+
+    /// Each PLCP1 bit `mac_tx_set_plcp1` sets is kept: the length, the rate, the key entry's byte
+    /// in bits 17 to 24, bit 25 with an HT rate and bit 29. Each other bit, and bit 25 with a rate
+    /// below 16, is refused by name.
+    #[test]
+    fn a_plcp1_bit_no_blob_function_sets_is_refused() {
+        for value in [
+            0x0008_b1ff,
+            0xff << keys::PLCP1_SHIFT | 0x31,
+            PLCP1_HT | 0x10 << PLCP1_RATE_SHIFT | 0x31,
+            1 << 29 | 0x31,
+        ] {
+            let mut radio = Radio::new();
+            assert_eq!(
+                radio.write(Tick(0), PLCP1, value, |_| None),
+                Store::Kept,
+                "{value:#x}"
+            );
+        }
+        for value in [1 << 26, 1 << 27, 1 << 28, 1 << 30, 1 << 31, PLCP1_HT | 0x31] {
+            let mut radio = Radio::new();
+            assert_eq!(
+                radio.write(Tick(0), PLCP1, value, |_| None),
+                Store::Refused("tx_plcp1"),
+                "{value:#x}"
+            );
+        }
+        // MCS 0 with bit 25 goes on the air, and so does a frame with bit 29.
+        for plcp1 in [PLCP1_HT | 0x10 << PLCP1_RATE_SHIFT | 0x31, 1 << 29 | 0x31] {
+            let mut radio = ready(plcp1);
+            assert_eq!(start(&mut radio, Tick(0), &PROBE, 49), Store::Sent);
+        }
+    }
+
+    /// The radio refuses a store to the key table or its control words that no blob function
+    /// makes, as [`keys::refused`] names it, and keeps the stock station's.
+    #[test]
+    fn a_key_table_store_no_blob_function_makes_is_refused() {
+        let mut radio = Radio::new();
+        let word1 = keys::KEYS + 40 * 4 + 4;
+        for (addr, value) in [
+            (word1, 0x086c_0165),
+            (keys::VALID, 0x11),
+            (keys::CONTROL, 0x30103),
+        ] {
+            assert_eq!(radio.write(Tick(0), addr, value, |_| None), Store::Kept);
+        }
+        for (addr, value, name) in [
+            (word1, 0x086e_0165, "key_entry"),
+            (keys::VALID, 1 << 25, "key_valid"),
+            (keys::CONTROL, 0x103, "crypto_control"),
+            (0x6003_3840, 24, "crypto_init"),
+        ] {
+            assert_eq!(
+                radio.write(Tick(0), addr, value, |_| None),
+                Store::Refused(name)
+            );
+        }
     }
 
     /// The stock station's stores, in its order: timer 0 loaded with the access point's TSF
