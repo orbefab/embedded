@@ -22,9 +22,12 @@ const TWBR: u16 = 0x00B8;
 const TWSR: u16 = 0x00B9;
 const TWAR: u16 = 0x00BA;
 const TWCR: u16 = 0x00BC;
+const TWAMR: u16 = 0x00BD;
 const UCSR0C: u16 = 0x00C2;
 
 const SLEEP: u16 = 0x9588;
+const BREAK: u16 = 0x9598;
+const SPM: u16 = 0x95E8;
 /// A word that decodes to no instruction.
 const UNKNOWN: u16 = 0xFFFF;
 
@@ -287,14 +290,121 @@ fn wire_begin(address: Option<u8>, twar_first: bool) -> Vec<u16> {
 }
 
 #[test]
-fn a_twi_slave_address_is_noted_and_a_master_is_not() {
+fn twi_slave_is_refused_and_a_master_is_quiet() {
     for twar_first in [false, true] {
         let cpu = run(&wire_begin(Some(0x42), twar_first), 100);
-        let noted: Vec<Unmodeled> = cpu.noted().iter().map(|noted| noted.what).collect();
-        assert_eq!(noted, [Unmodeled::TwiSlave], "twar_first {twar_first}");
-        assert_eq!(cpu.refusal(), None);
-        assert!(run(&wire_begin(None, twar_first), 100).noted().is_empty());
+        assert_eq!(
+            cpu.refusal().map(|refusal| refusal.what),
+            Some(setting("TWI", "slave")),
+            "twar_first {twar_first}"
+        );
+        let master = run(&wire_begin(None, twar_first), 100);
+        assert_eq!(master.refusal(), None);
+        assert!(master.noted().is_empty());
     }
+    // Setting a nonzero mask in TWAMR (bits 7:1) with TWEN | TWEA also enables slave address
+    // matching (§22.9.6) and is refused in either write order; bit 0 is reserved and ignored.
+    for twamr_first in [false, true] {
+        let mut twamr = vec![ldi(16, 0x04)];
+        twamr.extend(sts(16, TWAMR));
+        let mut twcr = vec![ldi(16, 0x45)];
+        twcr.extend(sts(16, TWCR));
+        let mut words = if twamr_first {
+            [twamr, twcr].concat()
+        } else {
+            [twcr, twamr].concat()
+        };
+        words.push(spin());
+        assert_eq!(
+            refused(&words),
+            Some(setting("TWI", "slave")),
+            "twamr_first {twamr_first}"
+        );
+    }
+    // TWAMR bit 0 alone (reserved) or TWAMR = 0 with TWEN | TWEA stays quiet.
+    let mut quiet = vec![ldi(16, 0x01)];
+    quiet.extend(sts(16, TWAMR));
+    quiet.push(ldi(16, 0x45));
+    quiet.extend(sts(16, TWCR));
+    quiet.push(spin());
+    assert_eq!(refused(&quiet), None);
+    // Writing TWAR or TWAMR without TWEA | TWEN stays quiet.
+    assert_eq!(refused(&store(TWAR, 0x84)), None);
+    assert_eq!(refused(&store(TWAMR, 0x04)), None);
+}
+
+#[test]
+fn break_is_a_nop_without_dwen_and_refused_with_dwen() {
+    // Default fuses leave DWEN unprogrammed (high = 0xD9): BREAK acts as a 1-cycle NOP.
+    let words = [BREAK, ldi(16, 0x5A), spin()];
+    let cpu = run(&words, 20);
+    assert_eq!(cpu.refusal(), None);
+    assert!(!cpu.is_stopped());
+    assert_eq!(cpu.reg(16), 0x5A);
+
+    // With DWEN programmed (high bit 6 = 0), BREAK stops the core and refuses.
+    let mut dwen = Cpu::new();
+    dwen.set_fuses(0xFF, 0x99, 0xFF);
+    dwen.watch_gaps();
+    dwen.load_words(&words);
+    dwen.run_until(20);
+    assert!(dwen.is_stopped());
+    assert_eq!(
+        dwen.refusal().map(|refusal| refusal.what),
+        Some(Refused::Instruction("break"))
+    );
+}
+
+#[test]
+fn spm_is_a_nop_in_application_flash_and_refused_in_the_boot_section() {
+    // Application section (pc < boot_word): §27.2 disables SPM in hardware, so it is a 1-cycle
+    // no-op and does not refuse.
+    let app = run(&[SPM, ldi(16, 0x33), spin()], 20);
+    assert_eq!(app.refusal(), None);
+    assert_eq!(app.reg(16), 0x33);
+
+    // Boot Loader Flash section (pc >= boot_word): refused with Refused::Instruction("spm").
+    // Default high fuse 0xD9 selects BOOTSZ 00, boot_word 0x3800.
+    let mut words = vec![0x0000u16; 0x3802];
+    words[0] = 0x940C; // JMP 0x3800
+    words[1] = 0x3800;
+    words[0x3800] = SPM;
+    words[0x3801] = spin();
+    let boot = run(&words, 40);
+    assert_eq!(
+        boot.refusal(),
+        Some(Refusal {
+            what: Refused::Instruction("spm"),
+            at: 3,
+            pc: 0x3800,
+        })
+    );
+}
+
+#[test]
+fn calling_optiboot_boot_section_refuses_as_unsimulated() {
+    // JMP 0x3FFE (Optiboot's do_spm entry vector) with Bootloader::Optiboot and erased boot flash.
+    let mut flash = vec![0xFFu8; 4];
+    flash[0..2].copy_from_slice(&0x940Cu16.to_le_bytes());
+    flash[2..4].copy_from_slice(&0x3FFEu16.to_le_bytes());
+    let fuses = FuseBytes {
+        low: 0xFF,
+        high: 0xDE,
+        extended: 0xFD,
+    };
+    let mut bridge = Bridge::new(16_000_000, fuses, Bootloader::Optiboot, &flash);
+    bridge.power_on();
+    let limit = Time::from_ps(100_000_000_000);
+    while bridge.run_until(limit).is_some() {}
+    let (_, fault) = bridge.fault().expect("do_spm must refuse");
+    assert!(matches!(
+        fault,
+        Fault::UnsupportedSetting {
+            peripheral: "Optiboot",
+            setting: orbe_mcu::Setting::Unsimulated(_),
+            pc,
+        } if pc.pc == 0x7FFC
+    ));
 }
 
 #[test]

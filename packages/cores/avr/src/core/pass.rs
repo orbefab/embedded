@@ -316,6 +316,18 @@ impl<B: Bus> Bus for Probed<'_, B> {
     }
 
     #[inline(always)]
+    fn on_spm(&mut self, pc: u16, cycle: u64) {
+        self.probe.spoil();
+        self.bus.on_spm(pc, cycle);
+    }
+
+    #[inline(always)]
+    fn on_break(&mut self, pc: u16, cycle: u64) -> bool {
+        self.probe.spoil();
+        self.bus.on_break(pc, cycle)
+    }
+
+    #[inline(always)]
     fn take_stall(&mut self) -> u8 {
         let stall = self.bus.take_stall();
         if stall != 0 {

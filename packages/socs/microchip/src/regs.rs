@@ -1,24 +1,17 @@
-//! Register ids and the per-register masks carried in the chip table.
+//! Register ids and the per-register strobe masks carried in the chip table.
 //!
 //! Each device matches on `id`. The bus never re-decodes an address. `strobe`
 //! is the `SBI`/`CBI` mask (write-one-to-clear flags, or every bit of `PINx`).
-//! `unmodeled` bits are logged when a program writes them.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct OwnedReg {
     pub addr: u16,
     pub id: u8,
     pub strobe: u8,
-    pub unmodeled: u8,
 }
 
-pub(crate) const fn owned(addr: u16, id: u8, strobe: u8, unmodeled: u8) -> OwnedReg {
-    OwnedReg {
-        addr,
-        id,
-        strobe,
-        unmodeled,
-    }
+pub(crate) const fn owned(addr: u16, id: u8, strobe: u8) -> OwnedReg {
+    OwnedReg { addr, id, strobe }
 }
 
 /// `PINx`, `DDRx`, `PORTx`.
@@ -53,17 +46,11 @@ pub(crate) const UDR: u8 = 5;
 
 /// `UCSRnA.TXC` is write-one-to-clear (DS40002061B §20.11.2).
 pub(crate) const UCSRA_TXC_STROBE: u8 = 1 << 6;
-/// `UMSEL1:0` is handled by the USART. Synchronous mode (`01`) and the reserved
-/// encoding (`10`) are logged there. MSPIM (`11`) is modeled (§21).
-pub(crate) const UCSRC_UMSEL_UNMODELED: u8 = 0;
-/// `UBRRnH` bits 7:4 are reserved (§20.11.5).
-pub(crate) const UBRRH_UNMODELED: u8 = 0xF0;
 
 /// SPI register ids. `SPSR` bits 5:1 are reserved (§19.5.2).
 pub(crate) const SPCR: u8 = 0;
 pub(crate) const SPSR: u8 = 1;
 pub(crate) const SPDR: u8 = 2;
-pub(crate) const SPSR_UNMODELED: u8 = 0x3E;
 
 /// TWI register ids. `TWCR` bit 1 and `TWSR` bit 2 read 0. `TWAMR` bit 0 reads 0.
 pub(crate) const TWBR: u8 = 0;
@@ -72,8 +59,6 @@ pub(crate) const TWAR: u8 = 2;
 pub(crate) const TWDR: u8 = 3;
 pub(crate) const TWCR: u8 = 4;
 pub(crate) const TWAMR: u8 = 5;
-/// `TWCR` bit 1 is reserved (§22.9.2).
-pub(crate) const TWCR_UNMODELED: u8 = 0x02;
 
 pub(crate) const REG_CAP: usize = 18;
 
@@ -89,7 +74,6 @@ pub(crate) const fn reg_block() -> RegBlock {
             addr: 0,
             id: 0,
             strobe: 0,
-            unmodeled: 0,
         }; REG_CAP],
         len: 0,
     }

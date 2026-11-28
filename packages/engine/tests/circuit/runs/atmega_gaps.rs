@@ -24,6 +24,25 @@ const ADCL: u16 = 0x0078;
 const ADCH: u16 = 0x0079;
 const TWAR: u16 = 0x00BA;
 const TWCR: u16 = 0x00BC;
+const TWAMR: u16 = 0x00BD;
+const TCCR0A: u16 = 0x0044;
+const GPIOR0: u16 = 0x003E;
+const GPIOR1: u16 = 0x004A;
+const GPIOR2: u16 = 0x004B;
+const DWDR: u16 = 0x0051;
+const SPMCSR: u16 = 0x0057;
+const RESERVED_IO: u16 = 0x0058;
+
+const BREAK: u16 = 0x9598;
+const SPM: u16 = 0x95E8;
+
+fn jmp(word: u16) -> [u16; 2] {
+    [0x940C, word]
+}
+
+fn call(word: u16) -> [u16; 2] {
+    [0x940E, word]
+}
 
 fn ldi(d: u16, k: u16) -> u16 {
     0xE000 | ((k & 0xF0) << 4) | ((d - 16) << 4) | (k & 0x0F)
@@ -73,25 +92,32 @@ fn brne(from: usize, to: usize) -> u16 {
 
 const SPIN: u16 = 0xCFFF;
 
-/// Intel HEX of `words` from address 0.
-fn hex(words: &[u16]) -> String {
-    let bytes: Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
+/// Intel HEX of `(word_addr, words)` sections.
+fn hex_sections(sections: &[(u16, &[u16])]) -> String {
     let mut text = String::new();
-    for (k, chunk) in bytes.chunks(16).enumerate() {
-        let address = (k * 16) as u16;
-        let mut record = vec![chunk.len() as u8];
-        record.extend(address.to_be_bytes());
-        record.push(0);
-        record.extend(chunk);
-        let sum = record.iter().fold(0u8, |sum, &b| sum.wrapping_add(b));
-        record.push(sum.wrapping_neg());
-        text.push(':');
-        for byte in record {
-            text.push_str(&format!("{byte:02X}"));
+    for &(word_addr, words) in sections {
+        let bytes: Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
+        for (k, chunk) in bytes.chunks(16).enumerate() {
+            let address = word_addr * 2 + (k * 16) as u16;
+            let mut record = vec![chunk.len() as u8];
+            record.extend(address.to_be_bytes());
+            record.push(0);
+            record.extend(chunk);
+            let sum = record.iter().fold(0u8, |sum, &b| sum.wrapping_add(b));
+            record.push(sum.wrapping_neg());
+            text.push(':');
+            for byte in record {
+                text.push_str(&format!("{byte:02X}"));
+            }
+            text.push('\n');
         }
-        text.push('\n');
     }
     text + ":00000001FF\n"
+}
+
+/// Intel HEX of `words` from address 0.
+fn hex(words: &[u16]) -> String {
+    hex_sections(&[(0, words)])
 }
 
 /// Shows r17 on PORTD, then sets PB0 and spins.
@@ -319,21 +345,154 @@ fn the_comparator_on_a_divider_is_refused_at_its_first_read_of_acsr() {
 }
 
 #[test]
-fn wire_begin_0x42_as_a_slave_notes_twar_and_runs_on() {
-    // `Wire.begin(0x42)`: TWAR = 0x84, then TWCR = TWEN | TWIE | TWEA. The note comes at the
-    // TWCR store, word 4, cycle 4, which makes the TWI answer 0x42.
-    let mut words = vec![ldi(16, 0x84)];
-    words.extend(sts(TWAR, 16));
-    words.push(ldi(16, 0x45));
-    words.extend(sts(TWCR, 16));
-    words.extend([ldi(17, 0x42), ldi(16, 0x01), out(DDRB, 16)]);
-    show_r17(&mut words);
-    let ran = Ran::new(&netlist(&words, &[], serde_json::json!([]), &[]));
-    assert_eq!(ran.portd(), 0x42);
+fn twi_slave_via_twar_or_twamr_with_twea_refuses_and_master_stays_quiet() {
+    // `Wire.begin(0x42)`: TWAR = 0x84, then TWCR = TWEN | TWIE | TWEA. The refusal comes at the
+    // TWCR store, word 4 (byte 8), cycle 4 (reported at cycle 5 after the first step at cycle 4).
+    let mut twar = vec![ldi(16, 0x84)];
+    twar.extend(sts(TWAR, 16));
+    twar.push(ldi(16, 0x45));
+    twar.extend(sts(TWCR, 16));
+    twar.extend([ldi(17, 0x42), ldi(16, 0x01), out(DDRB, 16)]);
+    show_r17(&mut twar);
+    let ran = Ran::new(&netlist(&twar, &[], serde_json::json!([]), &[]));
+    assert!(!ran.high("pb0"), "PB0 never rises past the refusal");
     assert_eq!(
         ran.diagnostics(),
         [
-            "chip.unmodeled_register: #u1 wrote TWAR at 0x000000ba, whose effect the model does not run, at 250000 ps from 0x00000008"
+            "chip.unsupported_setting: #u1 set TWI slave at 0x00000008, which the model does not run, at 312500 ps"
+        ]
+    );
+
+    // Nonzero `TWAMR` mask with `TWEN | TWEA` also needs slave mode, even with `TWAR` untouched.
+    let mut twamr = vec![ldi(16, 0x0E)];
+    twamr.extend(sts(TWAMR, 16));
+    twamr.push(ldi(16, 0x45));
+    twamr.extend(sts(TWCR, 16));
+    twamr.extend([ldi(17, 0x42), ldi(16, 0x01), out(DDRB, 16)]);
+    show_r17(&mut twamr);
+    let ran = Ran::new(&netlist(&twamr, &[], serde_json::json!([]), &[]));
+    assert!(!ran.high("pb0"), "PB0 never rises past the refusal");
+    assert_eq!(
+        ran.diagnostics(),
+        [
+            "chip.unsupported_setting: #u1 set TWI slave at 0x00000008, which the model does not run, at 312500 ps"
+        ]
+    );
+
+    // Stock `Wire.begin()` (master mode): sets `TWCR = TWEN | TWIE | TWEA` without touching
+    // `TWAR` or `TWAMR`, so it stays quiet.
+    let mut master = vec![ldi(16, 0x45)];
+    master.extend(sts(TWCR, 16));
+    master.extend([ldi(17, 0x55), ldi(16, 0x01), out(DDRB, 16)]);
+    show_r17(&mut master);
+    let ran = Ran::new(&netlist(&master, &[], serde_json::json!([]), &[]));
+    assert_eq!(ran.portd(), 0x55);
+    assert_eq!(ran.diagnostics(), Vec::<String>::new());
+
+    // Reserved bits in `TCCR0A` (bits 3:2, §15.9.1) are ignored on write and read as 0.
+    let mut reserved = vec![ldi(16, 0x0C)];
+    reserved.extend(sts(TCCR0A, 16));
+    reserved.extend(lds(17, TCCR0A));
+    reserved.extend([ldi(16, 0x01), out(DDRB, 16)]);
+    show_r17(&mut reserved);
+    let ran = Ran::new(&netlist(&reserved, &[], serde_json::json!([]), &[]));
+    assert_eq!(ran.portd(), 0x00);
+    assert_eq!(ran.diagnostics(), Vec::<String>::new());
+}
+
+#[test]
+fn reserved_io_addresses_read_zero_and_gpior_stores() {
+    // DS40002061B §36, §25.4.1, §27.9.1: reserved I/O addresses (0x0058), `DWDR` with `DWEN`
+    // unprogrammed (0x0051), and read-only `SPMCSR.RWWSB` (0x0057) are not RAM and read as 0.
+    for (addr, value) in [(RESERVED_IO, 0xA5), (DWDR, 0xA5), (SPMCSR, 0x40)] {
+        let mut words = vec![ldi(16, value)];
+        words.extend(sts(addr, 16));
+        words.extend(lds(17, addr));
+        words.extend([ldi(16, 0x01), out(DDRB, 16)]);
+        show_r17(&mut words);
+        let ran = Ran::new(&netlist(&words, &[], serde_json::json!([]), &[]));
+        assert_eq!(ran.portd(), 0x00, "addr {addr:#06x}");
+        assert_eq!(ran.diagnostics(), Vec::<String>::new(), "addr {addr:#06x}");
+    }
+    // DS40002061B §7.5: `GPIOR0`, `GPIOR1` and `GPIOR2` are general-purpose R/W registers.
+    for (addr, value) in [(GPIOR0, 0xA5), (GPIOR1, 0x5A), (GPIOR2, 0x3C)] {
+        let mut words = vec![ldi(16, value)];
+        words.extend(sts(addr, 16));
+        words.extend(lds(17, addr));
+        words.extend([ldi(16, 0x01), out(DDRB, 16)]);
+        show_r17(&mut words);
+        let ran = Ran::new(&netlist(&words, &[], serde_json::json!([]), &[]));
+        assert_eq!(ran.portd(), value as u8, "GPIOR {addr:#06x}");
+        assert_eq!(ran.diagnostics(), Vec::<String>::new(), "GPIOR {addr:#06x}");
+    }
+}
+
+#[test]
+fn break_runs_as_a_nop_when_dwen_is_unprogrammed() {
+    // DS40002198B `BREAK`, DS40002061B Table 28-8: with `DWEN` unprogrammed, `BREAK` acts as a
+    // one-cycle `NOP` instead of halting the CPU.
+    let mut words = vec![BREAK, ldi(17, 0x5A), ldi(16, 0x01), out(DDRB, 16)];
+    show_r17(&mut words);
+    let ran = Ran::new(&netlist(&words, &[], serde_json::json!([]), &[]));
+    assert_eq!(ran.portd(), 0x5A);
+    assert_eq!(ran.diagnostics(), Vec::<String>::new());
+}
+
+#[test]
+fn spm_in_the_application_section_is_a_nop_and_in_the_boot_section_refuses() {
+    // DS40002061B §27.2, §27.6: `SPM` in the Application Flash section (`pc < boot_word`) is
+    // disabled by hardware and has no effect.
+    let mut app = vec![SPM, ldi(17, 0x33), ldi(16, 0x01), out(DDRB, 16)];
+    show_r17(&mut app);
+    let ran = Ran::new(&netlist(&app, &[], serde_json::json!([]), &[]));
+    assert_eq!(ran.portd(), 0x33);
+    assert_eq!(ran.diagnostics(), Vec::<String>::new());
+
+    // In the Boot Loader Flash section (`pc >= 0x3800` for high fuse 0xD9, Table 27-13), `SPM`
+    // would program flash, so the chip refuses it.
+    let boot_word = 0x3800u16;
+    let boot = [SPM, sbi(DDRB, 0), sbi(PORTB, 0), SPIN];
+    let mut nl = netlist(&[], &[], serde_json::json!([]), &[]);
+    let chip = nl["parts"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|part| part["kind"] == "atmega328p")
+        .unwrap();
+    chip["firmware"] = hex_sections(&[(0, &jmp(boot_word)), (boot_word, &boot)]).into();
+    let ran = Ran::new(&nl);
+    assert!(!ran.high("pb0"), "PB0 never rises past the refused SPM");
+    assert_eq!(
+        ran.diagnostics(),
+        [
+            "chip.unsupported_instruction: #u1 reached `spm` at 0x00007000, which the model does not run, at 187500 ps"
+        ]
+    );
+}
+
+#[test]
+fn calling_optiboot_do_spm_refuses_with_optiboot_unsimulated() {
+    // Optiboot's `do_spm` entry sits in the boot section (byte 0x7FFC, word 0x3FFE). The engine
+    // does not load Optiboot's code into flash, so calling into `0x3F00..=0x3FFF` refuses loudly
+    // rather than executing NOPs through the end of flash.
+    let mut words = Vec::new();
+    words.extend(call(0x3FFE));
+    words.extend([sbi(DDRB, 0), sbi(PORTB, 0), SPIN]);
+    let mut nl = netlist(&words, &[], serde_json::json!([]), &[]);
+    let chip = nl["parts"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|part| part["kind"] == "atmega328p")
+        .unwrap();
+    chip["bootloader"] = "optiboot".into();
+    chip["fuses"]["high"] = 0xDE.into();
+    let ran = Ran::new(&nl);
+    assert!(!ran.high("pb0"), "PB0 never rises past the refused call");
+    assert_eq!(
+        ran.diagnostics(),
+        [
+            "chip.unsupported_setting: #u1 used Optiboot, its boot-section code (such as do_spm), at 0x00007ffc, which the model does not simulate, at 312500 ps"
         ]
     );
 }

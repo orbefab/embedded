@@ -348,6 +348,7 @@ impl Core {
                 let z = self.z();
                 let data = u16::from(self.at(0)) | (u16::from(self.at(1)) << 8);
                 self.spm.push(SpmNote { z, word: data });
+                bus.on_spm(pc, self.cycles);
                 self.finish(next, 1);
             }
             Op::Sleep => {
@@ -363,7 +364,9 @@ impl Core {
                 self.finish(next, 1);
             }
             Op::Break => {
-                self.stopped = true;
+                if bus.on_break(pc, self.cycles) {
+                    self.stopped = true;
+                }
                 self.finish(next, 1);
             }
             Op::Sei => {

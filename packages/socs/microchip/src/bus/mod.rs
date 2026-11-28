@@ -2,8 +2,8 @@
 //!
 //! Addresses `0x0000`–`0x001F` are the register file. `0x0020`–`0x00FF` is I/O.
 //! An address the chip table assigns is `{ device, register id }`, decoded once
-//! when the bus is built. Anything else is a logged byte. SRAM runs from
-//! `0x0100` through RAMEND. `SREG`, `SPL`, and `SPH` are the core's.
+//! when the bus is built. Reserved I/O addresses read as zero and ignore writes.
+//! SRAM runs from `0x0100` through RAMEND. `SREG`, `SPL`, and `SPH` are the core's.
 //!
 //! `next_event` is the soonest [`crate::periph::Device::next_event`].
 //! An instruction that ends before that event
@@ -34,7 +34,7 @@ use orbe_avr::Core;
 use crate::chip::{ClockDomain, DEVICES, DeviceSpec, ModuleGate, RAMEND, SPH, SPL, SREG};
 use crate::mux::PinMux;
 use crate::periph::usart::{Sent, Shifted};
-use crate::periph::{Device, IoWrite, Notice, StoreAt, Touch, push_pin, rows_of};
+use crate::periph::{Device, Notice, StoreAt, Touch, push_pin, rows_of};
 use crate::regs::{GPIO_PIN, OwnedReg};
 use crate::{Level, PIN_QUEUE_CAP, PinLevels, PinOrigin, PinReport};
 
@@ -54,11 +54,9 @@ struct Slot {
     reg: u8,
 }
 
-/// Pin reports and the I/O-write log.
+/// Pin reports queued for the host.
 #[derive(Debug, Clone)]
 struct HostQueues {
-    io_writes: Vec<IoWrite>,
-    io_drops: u64,
     pins: VecDeque<PinReport>,
     pending: Vec<PinReport>,
     pin_overflow: u64,
@@ -70,8 +68,6 @@ impl HostQueues {
             &mut self.pins,
             &mut self.pending,
             &mut self.pin_overflow,
-            &mut self.io_writes,
-            &mut self.io_drops,
             epochs,
         )
     }
@@ -95,10 +91,8 @@ pub(crate) struct Bus {
     windows: bool,
     /// Stall cycles the current instruction still has to add (§8.4.1).
     cpu_halt: u8,
-    io: [u8; IO_LEN],
     sram: Vec<u8>,
     strobe: [u8; IO_LEN],
-    unmodeled: [u8; IO_LEN],
     owners: [Slot; IO_LEN],
     devices: Vec<Device>,
     /// Kind of each `devices[i]`, resolved when the chip is built.
@@ -138,10 +132,8 @@ clone_fields!(Bus {
     samples,
     windows,
     cpu_halt,
-    io,
     sram,
     strobe,
-    unmodeled,
     owners,
     devices,
     index,
@@ -250,10 +242,9 @@ impl orbe_avr::Bus for Bus {
             return false;
         }
         let slot = self.owners[index];
-        // A stepped store also logs unmodeled bits and delivers waiting edges and notices.
+        // A stepped store also delivers waiting edges and notices.
         slot.dev != NO_DEV
             && self.devices[usize::from(slot.dev)].store_idle(slot.reg, value, &self.mux)
-            && self.unmodeled[index] & value == 0
             && !self.mux.has_pending_edges()
             && !self.notices_wait()
     }
@@ -316,6 +307,26 @@ impl orbe_avr::Bus for Bus {
     }
 
     #[inline(always)]
+    fn on_spm(&mut self, pc: u16, cycle: u64) {
+        // DS40002061B §27.2, §27.6: `SPM` is disabled in the Application Flash section
+        // (`pc < boot_word`) and active only in the Boot Loader Flash section (`BOOTSZ`, Table 27-13).
+        if pc >= self.fuses().boot_word {
+            self.refuse(crate::Refused::Instruction("spm"), cycle, pc);
+        }
+    }
+
+    #[inline(always)]
+    fn on_break(&mut self, pc: u16, cycle: u64) -> bool {
+        // DS40002198B `BREAK`, DS40002061B Table 28-8: with `DWEN` unprogrammed, debugWIRE is
+        // disabled and `BREAK` acts as a one-cycle `NOP`.
+        if !self.fuses().dwen {
+            return false;
+        }
+        self.refuse(crate::Refused::Instruction("break"), cycle, pc);
+        true
+    }
+
+    #[inline(always)]
     fn take_stall(&mut self) -> u8 {
         let stall = self.cpu_halt;
         if stall != 0 {
@@ -333,7 +344,6 @@ impl Bus {
             reg: 0,
         }; IO_LEN];
         let mut strobe = [0u8; IO_LEN];
-        let mut unmodeled = [0u8; IO_LEN];
         let mut devices = Vec::with_capacity(specs.len());
         let mut row_gate = Vec::with_capacity(specs.len());
         let mut timer_index = 0u8;
@@ -355,7 +365,6 @@ impl Bus {
                     reg: row.id,
                 };
                 strobe[slot] = row.strobe;
-                unmodeled[slot] = row.unmodeled;
             }
         }
         let mut pinx = [0u64; 4];
@@ -377,10 +386,8 @@ impl Bus {
             samples: Samples::Store,
             windows: false,
             cpu_halt: 0,
-            io: [0; IO_LEN],
             sram: vec![0; sram_len],
             strobe,
-            unmodeled,
             owners,
             devices,
             index,
@@ -389,8 +396,6 @@ impl Bus {
             mux: PinMux::new(),
             analog: HostAnalog::new(),
             host: HostQueues {
-                io_writes: Vec::new(),
-                io_drops: 0,
                 pins: VecDeque::with_capacity(PIN_QUEUE_CAP),
                 pending: Vec::with_capacity(crate::periph::PENDING_PIN_CAP),
                 pin_overflow: 0,
@@ -687,14 +692,6 @@ impl Bus {
         self.cycle
     }
 
-    pub(crate) fn io_writes(&self) -> &[IoWrite] {
-        &self.host.io_writes
-    }
-
-    pub(crate) fn io_write_drops(&self) -> u64 {
-        self.host.io_drops
-    }
-
     pub(crate) fn take_pin(&mut self) -> Option<PinReport> {
         self.host.pins.pop_front()
     }
@@ -936,7 +933,7 @@ impl Bus {
             return;
         }
         if let Some(index) = io_index(addr) {
-            self.store_io(index, addr, value, cycles);
+            self.store_io(index, value, cycles);
             if self.gap_watched(addr) {
                 self.gap_store(core, addr, value);
             }
@@ -1211,7 +1208,7 @@ impl Bus {
     fn peek_io(&self, index: usize) -> u8 {
         let slot = self.owners[index];
         if slot.dev == NO_DEV {
-            return self.io[index];
+            return 0;
         }
         let clock = self.clock_view();
         self.devices[usize::from(slot.dev)].peek(slot.reg, &self.mux, self.cycle, &clock)
@@ -1220,7 +1217,7 @@ impl Bus {
     fn load_io(&mut self, index: usize) -> u8 {
         let slot = self.owners[index];
         if slot.dev == NO_DEV {
-            return self.io[index];
+            return 0;
         }
         let cycle = self.cycle;
         let clock = self.clock_view();
@@ -1232,15 +1229,10 @@ impl Bus {
         value
     }
 
-    fn store_io(&mut self, index: usize, addr: u16, value: u8, cycles: u64) {
+    fn store_io(&mut self, index: usize, value: u8, cycles: u64) {
         let slot = self.owners[index];
         if slot.dev == NO_DEV {
-            self.io[index] = value;
-            self.log(addr, value);
             return;
-        }
-        if self.unmodeled[index] & value != 0 {
-            self.log(addr, value);
         }
         let at = StoreAt {
             cycle: self.cycle,
@@ -1256,7 +1248,7 @@ impl Bus {
                 ..
             } = self;
             let mut ctx = host.ctx(epochs);
-            devices[usize::from(slot.dev)].write(slot.reg, value, &mut ctx, mux, at, &clock, addr)
+            devices[usize::from(slot.dev)].write(slot.reg, value, &mut ctx, mux, at, &clock)
         };
         if Some(slot.dev) == self.index.extint {
             self.note_sensed();
@@ -1270,7 +1262,6 @@ impl Bus {
     fn poke_io(&mut self, index: usize, value: u8) {
         let slot = self.owners[index];
         if slot.dev == NO_DEV {
-            self.io[index] = value;
             return;
         }
         if self.index.prescaler == Some(slot.dev) {

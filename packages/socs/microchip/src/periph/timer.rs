@@ -61,13 +61,6 @@ const TCCRB_16: u8 = 0xDF;
 /// `TCCRnB` for an 8-bit timer: `WGMn2` and the clock select. `FOC` reads as zero.
 const TCCRB_8: u8 = 0x0F;
 
-/// `TCCRnB` bits 5:4 are reserved on an 8-bit timer. `FOC` is modeled.
-pub(crate) const TCCRB_8_UNMODELED: u8 = 0x30;
-/// `TCCRnB` bit 5 is reserved on a 16-bit timer.
-pub(crate) const TCCRB_16_UNMODELED: u8 = 1 << 5;
-/// `TCCRnA` bits 3:2 are reserved.
-pub(crate) const TCCRA_UNMODELED: u8 = 0x0C;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Kind {
     Normal,
@@ -230,10 +223,6 @@ impl Timer {
         self.gate & 2 != 0
     }
 
-    pub(crate) fn as2(&self) -> bool {
-        self.assr & (1 << 5) != 0
-    }
-
     pub(crate) fn new(cfg: TimerCfg, index: u8) -> Self {
         Self {
             cfg,
@@ -383,7 +372,6 @@ impl Timer {
         mux: &mut PinMux,
         StoreAt { cycle, end }: StoreAt,
         clock: &ClockView,
-        addr: u16,
     ) -> Touch {
         // §10.9. The module is frozen. The store is discarded.
         if self.prr_off() {
@@ -399,14 +387,9 @@ impl Timer {
         match reg {
             TCCR_A => {
                 self.tccra = value & TCCRA_MASK;
-                self.note_reserved(addr, value, ctx);
-                self.note_reserved_com(addr, value, ctx);
                 self.publish(mux, ctx, None, cycle);
             }
             TCCR_B => {
-                if decode(self.wgm_with(self.tccra, value), self.is16()).reserved {
-                    ctx.log(addr, value);
-                }
                 self.select = Some(Select { value, at: end });
             }
             TCCR_C => {
@@ -443,9 +426,6 @@ impl Timer {
             }
             ASSR => {
                 self.assr = value & ASSR_CLOCK_SELECT;
-                if self.assr != 0 {
-                    ctx.log(addr, value);
-                }
                 touch.schedule = false;
             }
             OCR_A => self.write_ocr(0, self.assemble_ocr(value)),
@@ -1247,21 +1227,6 @@ impl Timer {
             (tccra & 0x03) | ((tccrb & 0x18) >> 1)
         } else {
             (tccra & 0x03) | ((tccrb & 0x08) >> 1)
-        }
-    }
-
-    fn note_reserved(&self, addr: u16, value: u8, ctx: &mut Ctx<'_>) {
-        if self.wave().reserved {
-            ctx.log(addr, value);
-        }
-    }
-
-    fn note_reserved_com(&self, addr: u16, value: u8, ctx: &mut Ctx<'_>) {
-        for unit in 0..COMPARES {
-            if self.com(unit) == 1 && self.com_disconnected(unit) {
-                ctx.log(addr, value);
-                return;
-            }
         }
     }
 

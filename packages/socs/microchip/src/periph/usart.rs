@@ -272,8 +272,6 @@ pub(crate) struct Usart {
     rx_bit: u8,
     rx_pin: u8,
     xck_pin: u8,
-    /// `UCSRnC` address, so a synchronous-mode write can be logged.
-    ucsrc_addr: u16,
     rx_vec: u8,
     udre_vec: u8,
     tx_vec: u8,
@@ -357,12 +355,6 @@ impl Usart {
             rx_bit: cfg.rx.bit,
             rx_pin: cfg.rx.port.pin_id(cfg.rx.bit) as u8,
             xck_pin: cfg.xck.port.pin_id(cfg.xck.bit) as u8,
-            ucsrc_addr: cfg
-                .regs
-                .iter()
-                .find(|reg| reg.id == UCSRC)
-                .map(|reg| reg.addr)
-                .unwrap_or(0),
             rx_vec: cfg.rx_vec,
             udre_vec: cfg.udre_vec,
             tx_vec: cfg.tx_vec,
@@ -538,7 +530,7 @@ impl Usart {
         reg: u8,
         value: u8,
         _mux: &mut PinMux,
-        ctx: &mut Ctx<'_>,
+        _ctx: &mut Ctx<'_>,
         _cycle: u64,
     ) -> crate::periph::Touch {
         if !self.running() {
@@ -571,10 +563,6 @@ impl Usart {
                 touch.stamp = true;
             }
             UCSRC => {
-                let umsel = value & UMSEL;
-                if umsel != 0 && umsel != UMSEL {
-                    ctx.log(self.ucsrc_addr, value);
-                }
                 let was_async = self.async_mode();
                 let was_mspim = self.mspim();
                 self.ucsrc = value;

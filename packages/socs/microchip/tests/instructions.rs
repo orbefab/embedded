@@ -88,41 +88,37 @@ fn sleep() {
 
 #[test]
 fn unowned_and_reserved_stores_change_only_what_they_model() {
-    // PORTB takes the store. An unowned address is plain memory. A reserved
-    // waveform mode does not start the counter. The log cap is
-    // `firmware.rs`'s ten-second blink.
+    // PORTB and GPIOR0..=GPIOR2 take stores; reserved I/O addresses (0x0020, 0x0058) and
+    // DWDR (0x0051) ignore writes and read as zero (§25.4.1, §36). Reserved bits in TCCR0A
+    // (bits 3:2, §15.9.1) read as zero, and a reserved waveform mode does not start the counter.
     let mut cpu = Cpu::new();
     cpu.load_words(&[
         imm(0xE000, 16, 0xA5),
-        out_reg(16, 0x05),
-        0x9A00,
+        out_reg(16, 0x05), // PORTB = 0xA5
+        0x9A00,            // SBI 0x00 (reserved 0x0020), 0
+        0x9300,
+        0x0058, // STS 0x0058 (reserved), r16
+        0x9300,
+        0x0051, // STS 0x0051 (DWDR), r16
+        0x9300,
+        0x003E, // STS 0x003E (GPIOR0), r16
+        0x9300,
+        0x004A, // STS 0x004A (GPIOR1), r16
+        0x9300,
+        0x004B, // STS 0x004B (GPIOR2), r16
+        imm(0xE000, 16, 0x0C),
+        out_reg(16, 0x24), // TCCR0A = 0x0C (reserved bits 3:2)
         imm(0xE000, 16, 0x09),
-        out_reg(16, 0x25),
+        out_reg(16, 0x25), // TCCR0B = 0x09 (reserved WGM 4 + prescaler 1)
     ]);
-    cpu.insns(5);
+    cpu.insns(12);
     assert_eq!(cpu.peek(0x0025), 0xA5, "PORTB took the store");
-    assert_eq!(cpu.peek(0x0020), 0x01, "SBI wrote the unowned byte");
+    assert_eq!(cpu.peek(0x0020), 0, "reserved I/O 0x0020 reads zero");
+    assert_eq!(cpu.peek(0x0058), 0, "reserved I/O 0x0058 reads zero");
+    assert_eq!(cpu.peek(0x0051), 0, "DWDR reads zero");
+    assert_eq!(cpu.peek(0x003E), 0xA5, "GPIOR0 stores and reads back");
+    assert_eq!(cpu.peek(0x004A), 0xA5, "GPIOR1 stores and reads back");
+    assert_eq!(cpu.peek(0x004B), 0xA5, "GPIOR2 stores and reads back");
+    assert_eq!(cpu.peek(0x0044), 0, "TCCR0A reserved bits 3:2 read zero");
     assert_eq!(cpu.peek(0x0046), 0, "reserved WGM does not count");
-    let logged: Vec<_> = cpu.io_writes().iter().map(|write| write.addr).collect();
-    assert!(
-        logged.contains(&0x0020),
-        "unowned address is logged: {logged:?}"
-    );
-    assert!(
-        logged.contains(&0x0045),
-        "reserved TCCR0B field is logged: {logged:?}"
-    );
-    assert!(
-        !logged.contains(&0x0025),
-        "PORTB is modeled and stays out of the log: {logged:?}"
-    );
-
-    let mut flood = Cpu::new();
-    // LDI, then STS r16, 0x0020 and RJMP back to that STS.
-    flood.load_words(&[imm(0xE000, 16, 0x01), 0x9300, 0x0020, 0xCFFD]);
-    let extra = 10u64;
-    let writes = orbe_microchip::IO_LOG_CAP as u64 + extra;
-    flood.insns(u32::try_from(1 + writes * 2).unwrap());
-    assert_eq!(flood.io_writes().len(), orbe_microchip::IO_LOG_CAP);
-    assert_eq!(flood.io_write_drops(), extra);
 }

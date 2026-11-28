@@ -677,14 +677,17 @@ fn a_brown_out_with_an_interrupt_pad_in_one_input_lands_where_it_lands_alone() {
     }
 }
 
-/// `INTF0` set on the `BREAK`'s own cycle is never taken: an input on another pin, or a run,
-/// leaves the stopped core where it stopped.
+/// With `DWEN` programmed, `INTF0` set on the `BREAK`'s own cycle is never taken: an input on
+/// another pin, or a run, leaves the stopped core where it stopped.
 #[test]
 fn a_stopped_core_takes_no_interrupt() {
     let mut words = isr_toggles(0x03);
     words.extend([0, 0, 0, 0, 0, BREAK, 0, 0]);
     for pad in 9..20 {
-        let mut timeline = Timeline::new(cpu(&words));
+        let mut chip = cpu(&words);
+        // Program `DWEN` (high fuse bit 6 = 0) so `BREAK` stops the core.
+        chip.set_fuses(0xFF, 0x99, 0xFF);
+        let mut timeline = Timeline::new(chip);
         timeline.set_pad(PD2, false);
         while timeline.run_until(pad).is_some() {}
         timeline.set_pad(PD2, true);

@@ -9,7 +9,7 @@ use orbe_avr::{Activity, Core, PassProbe, SpmNote};
 
 use crate::boot::{
     Access, Bootloader, GETCH_WORD, OPTIBOOT_MCUSR_AT, OPTIBOOT_TO_APP, OPTIBOOT_WDCE_AT,
-    OPTIBOOT_WDT_OFF_AT, WAIT_FIRST, Wait,
+    OPTIBOOT_WDT_OFF_AT, OPTIBOOT_WORD, WAIT_FIRST, Wait,
 };
 use crate::bus::Bus;
 use crate::chip::{FLASH_WORDS, IRQ_CYCLES, RAMEND, SPH, SPL, USART0, VECTORS};
@@ -17,7 +17,7 @@ use crate::fuses::FuseBytes;
 use crate::irq;
 use crate::periph::system::{BORF, EXTRF, PORF, WDRF};
 use crate::periph::usart::Sent;
-use crate::{IoWrite, Level, Noted, PinLevels, PinReport, Refusal, Refused};
+use crate::{Level, Noted, PinLevels, PinReport, Refusal, Refused};
 
 mod seam;
 
@@ -434,15 +434,6 @@ impl Cpu {
         self.core.cycles()
     }
 
-    pub fn io_writes(&self) -> &[IoWrite] {
-        self.bus.io_writes()
-    }
-
-    /// Diagnostic writes dropped after [`crate::IO_LOG_CAP`].
-    pub fn io_write_drops(&self) -> u64 {
-        self.bus.io_write_drops()
-    }
-
     pub fn spm_notes(&self) -> &[SpmNote] {
         self.core.spm_notes()
     }
@@ -507,9 +498,22 @@ impl Cpu {
     #[cold]
     fn check_gaps(&mut self) {
         // §37 lists the instruction set. A word outside it does nothing the datasheet names,
-        // and the model runs it as a one-cycle no-op.
+        // and the model runs it as a one-cycle no-op. With Optiboot selected, the boot section
+        // holds erased words instead of Optiboot's binary, so a call into it (such as `do_spm`
+        // at word `0x3FFE`) lands here and names Optiboot.
         if let Some((pc, cycle)) = self.core.first_unknown() {
-            self.bus.refuse(Refused::Instruction("unknown"), cycle, pc);
+            if self.bootloader == Bootloader::Optiboot && pc >= OPTIBOOT_WORD {
+                self.bus.refuse(
+                    Refused::Unsimulated {
+                        peripheral: "Optiboot",
+                        what: "its boot-section code (such as do_spm)",
+                    },
+                    cycle,
+                    pc,
+                );
+            } else {
+                self.bus.refuse(Refused::Instruction("unknown"), cycle, pc);
+            }
         }
         self.bus.gap_deadline(self.cycles());
     }

@@ -130,7 +130,13 @@ impl Bridge {
         cpu.set_clock_hz(clock_hz);
         cpu.set_fuses(fuses.low, fuses.high, fuses.extended);
         cpu.set_bootloader(bootloader);
-        cpu.load_flash(flash);
+        // Unprogrammed flash bytes read as 0xFF (word 0xFFFF, outside §37's instruction set),
+        // so fetches past the loaded image or into Optiboot's unloaded boot section refuse
+        // instead of wrapping around as silent NOPs.
+        let mut image = vec![0xFF; crate::FLASH_BYTES];
+        let len = flash.len().min(crate::FLASH_BYTES);
+        image[..len].copy_from_slice(&flash[..len]);
+        cpu.load_flash(&image);
         let mut bridge = Bridge {
             timeline: Timeline::new(cpu),
             clock_hz: u64::from(clock_hz),

@@ -19,6 +19,7 @@ const TWBR: u16 = 0x00B8;
 const TWSR: u16 = 0x00B9;
 const TWAR: u16 = 0x00BA;
 const TWCR: u16 = 0x00BC;
+const TWAMR: u16 = 0x00BD;
 const UCSR0C: u16 = 0x00C2;
 
 /// §23.3.2 `ACSR`.
@@ -49,6 +50,7 @@ fn watched(addr: u16) -> bool {
                 | TWSR
                 | TWAR
                 | TWCR
+                | TWAMR
                 | UCSR0C
         )
 }
@@ -251,26 +253,37 @@ impl Bus {
             }
             TWAR => {
                 self.gaps.twar_set = true;
-                self.check_twi_slave(pc);
+                self.check_twi_slave(cycle, pc);
+            }
+            TWAMR => {
+                self.check_twi_slave(cycle, pc);
             }
             TWCR => {
-                self.check_twi_slave(pc);
+                self.check_twi_slave(cycle, pc);
                 self.check_twi_hold(value, pc);
             }
             _ => {}
         }
     }
 
-    /// §22.7.3 and §22.7.4. With `TWEN` and `TWEA` set, the TWI answers its own `TWAR` address,
-    /// and the general call when `TWGCE` is set, as a slave. The model has no slave modes, so
-    /// nothing answers. Wire's master sets both bits in `TWCR` and leaves `TWAR` at its reset
-    /// value, so the note asks for a firmware `TWAR` store too, as `Wire.begin(address)`
-    /// makes. A run stays right until another master addresses the chip.
-    fn check_twi_slave(&mut self, pc: u16) {
+    /// §22.7.3, §22.7.4 and §22.9.6. With `TWEN` and `TWEA` set, the TWI answers its own `TWAR`
+    /// address (masked by `TWAMR`), and the general call when `TWGCE` is set, as a slave. The
+    /// model has no slave modes, so nothing answers. Wire's master sets both bits in `TWCR` and
+    /// leaves `TWAR` at its reset value and `TWAMR` at 0, so a refusal asks for a firmware `TWAR`
+    /// store or a nonzero `TWAMR` mask too.
+    fn check_twi_slave(&mut self, cycle: u64, pc: u16) {
         const TWEA: u8 = 1 << 6;
         const TWEN: u8 = 1 << 2;
-        if self.gaps.twar_set && self.io_byte(TWCR) & (TWEA | TWEN) == TWEA | TWEN {
-            self.note(Unmodeled::TwiSlave, pc, true);
+        let slave_addr = self.gaps.twar_set || (self.io_byte(TWAMR) & 0xFE != 0);
+        if slave_addr && self.io_byte(TWCR) & (TWEA | TWEN) == TWEA | TWEN {
+            self.refuse(
+                Refused::Setting {
+                    peripheral: "TWI",
+                    setting: "slave",
+                },
+                cycle,
+                pc,
+            );
         }
     }
 

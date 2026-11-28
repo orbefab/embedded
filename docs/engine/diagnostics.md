@@ -486,7 +486,7 @@ The message is `{part} reached {what} at {pc}, which the model does not run, at 
 - `litbase`: an `l32r` while `LITBASE` is enabled.
 - `loop_end`: the op is the last of a zero-overhead loop and loops back, and it is a call, `isync`, `waiti` or `rsr.lcount`, which the ISA rules out there.
 
-On an `atmega328p`, `op` is `unknown`, a flash word that decodes to no instruction, and `reason` is `op`. The message reads `a word that decodes to no instruction` for `{what}`. `pc` is the word's byte address. An erased flash is all such words, so a firmware that runs off its end stops at the first one.
+On an `atmega328p`, `op` is `unknown` (a flash word that decodes to no instruction) or `spm` (an `SPM` instruction executed from the Boot Loader Flash section), and `reason` is `op`. For `unknown`, the message reads `a word that decodes to no instruction` for `{what}`. `pc` is the word's byte address. An erased flash is all `0xFFFF` words, so a firmware that runs off its end stops at the first one.
 
 ## chip.unsupported_setting
 
@@ -553,8 +553,9 @@ An `atmega328p` ends the run on these, each a firmware store unless it says othe
 - `SPMCSR`, with `peripheral` `BOOT_LOAD`: the store set a bit of `SPMCSR` below `SPMIE`. With `SPMIE` set, `setting` is `interrupt`.
 - `AS2` and `EXCLK`, with `peripheral` `TC2`: the store set that bit of `ASSR`.
 - `synchronous`, `UMSEL` and `UPM`, with `peripheral` `USART0`: the store wrote `UMSEL0` 01 or 10, or `UPM0` 01, to `UCSR0C`.
+- `slave`, with `peripheral` `TWI`: a store to `TWAR`, or a store setting a nonzero bit 7:1 mask in `TWAMR`, while `TWCR` holds `TWEN` and `TWEA`, or a store to `TWCR` setting both after such a store since the last reset.
 - `sleep`, with `peripheral` `CPU`: a `SLEEP` with `SE` set in `SM` 100 or 101. The message reads `put the chip to sleep in a reserved sleep mode`, and `pc` is the `SLEEP`'s.
-- `unsimulated`, with `peripheral` `Optiboot`: a byte reached USART0 while Optiboot waited for an upload after a reset from `RESET`, on a part that names `"bootloader": "optiboot"` with `BOOTRST` programmed. It is no store. Optiboot would answer the STK500 protocol, which the model does not run. The message reads `{part} used Optiboot, the upload a byte on RXD starts after a reset from the RESET pin, at 0x00007fa6, which the model does not simulate, at {t_ps} ps`. `pc` is `getch`, and `t_ps` is the poll that found `RXC0` set.
+- `unsimulated`, with `peripheral` `Optiboot`: either a byte reached USART0 while Optiboot waited for an upload after a reset from `RESET`, on a part that names `"bootloader": "optiboot"` with `BOOTRST` programmed (`pc` is `getch`, `0x00007fa6`, and `t_ps` is the poll that found `RXC0` set), or the sketch jumped or called into Optiboot's unloaded boot section (`0x7E00` to `0x7FFF`, such as `do_spm` at `0x7FFC`), where `pc` is the fetched boot-section word and `{what}` is `its boot-section code (such as do_spm)`. Neither is a store.
 
 ## chip.halted
 
@@ -670,7 +671,6 @@ The message is `{part} read {register} at {address}, which the model does not ke
 
 An `atmega328p` keeps every register, so each of its notes has `kept` true and `write` true, and the run lists each once, at the first store that makes it. `address` is the register's data address, and `register` is its datasheet name. [avr.md](avr.md#not-yet-modelled) gives each one's datasheet reason.
 
-- `TWAR`, at `0xba`: a store to `TWAR` while `TWCR` held `TWEN` and `TWEA`, or a store to `TWCR` that set both after a store to `TWAR` since the last reset. The TWI would answer as a slave, and the model has no slave modes.
 - `TWBR`, at `0xb8`: a store to `TWCR` that started a START at a bit rate whose data hold time passes Table 29-14's maximum, below about 18 kHz. The store is to `TWCR`, and the note names the register that sets the rate.
 - `OSCCAL`, at `0x66`: any store.
 
