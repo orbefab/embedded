@@ -67,30 +67,70 @@ impl Inputs {
         let is_active = |id: PartId| actives.iter().any(|chip| chip.part == Some(id));
         for (id, part) in netlist.parts() {
             let pins = part.model.pins();
+            let unite_dc_paths = |joined: &mut [usize], model: &Model| {
+                for &(left, right) in model.dc_paths() {
+                    unite(joined, pins[left].index(), pins[right].index());
+                }
+            };
             match &part.model {
                 Model::Switch(Switch { pins, .. }) => switches.push((id, *pins)),
                 Model::Capacitor(_) => {}
-                Model::Chip(Chip::Max7219(dev)) => {
-                    bands.push(InputBand {
-                        part: Ref::Part(part.name.clone()),
-                        vcc: columns.net(dev.pins[0]),
-                        gnd: columns.net(dev.pins[1]),
-                        pins: [
-                            (dev.pins[2], columns.net(dev.pins[2])),
-                            (dev.pins[3], columns.net(dev.pins[3])),
-                            (dev.pins[4], columns.net(dev.pins[4])),
-                        ],
-                        vil: dev.input_threshold.low.si.get(),
-                        vih: dev.input_threshold.high.si.get(),
-                        since: [None; 3],
-                        warned: false,
-                    });
-                }
-                _ if is_active(id) => {}
-                model => {
-                    for &(left, right) in model.dc_paths() {
-                        unite(&mut joined, pins[left].index(), pins[right].index());
+                Model::Chip(chip) => match chip {
+                    Chip::Max7219(dev) => {
+                        bands.push(InputBand {
+                            part: Ref::Part(part.name.clone()),
+                            vcc: columns.net(dev.pins[0]),
+                            gnd: columns.net(dev.pins[1]),
+                            pins: [
+                                (dev.pins[2], columns.net(dev.pins[2])),
+                                (dev.pins[3], columns.net(dev.pins[3])),
+                                (dev.pins[4], columns.net(dev.pins[4])),
+                            ],
+                            vil: dev.input_threshold.low.si.get(),
+                            vih: dev.input_threshold.high.si.get(),
+                            since: [None; 3],
+                            warned: false,
+                        });
                     }
+                    Chip::Atmega328p(_)
+                    | Chip::SpiReplay(_)
+                    | Chip::St77916(_)
+                    | Chip::Ssd1306(_)
+                    | Chip::Hd44780I2c(_)
+                    | Chip::Hd44780(_)
+                    | Chip::Cst816(_)
+                    | Chip::Dht22(_)
+                    | Chip::Bmp280(_)
+                    | Chip::Hc595(_)
+                    | Chip::Ws2812(_)
+                    | Chip::PulsesReplay(_)
+                    | Chip::Esp32s3(_)
+                    | Chip::Sg90(_) => {
+                        debug_assert!(is_active(id));
+                    }
+                    Chip::Ne555(_) => {
+                        debug_assert!(!is_active(id));
+                        unite_dc_paths(&mut joined, &part.model);
+                    }
+                },
+                model @ (Model::Resistor(_)
+                | Model::Potentiometer(_)
+                | Model::VoltageSource(_)
+                | Model::CurrentSource(_)
+                | Model::Diode(_)
+                | Model::Led(_)
+                | Model::Zener(_)
+                | Model::LinearRegulator(_)
+                | Model::Npn(_)
+                | Model::Pnp(_)
+                | Model::Nmos(_)
+                | Model::Pmos(_)
+                | Model::Inductor(_)
+                | Model::Relay(_)
+                | Model::OpAmp(_)
+                | Model::AnalogTempSensor(_)) => {
+                    debug_assert!(!is_active(id));
+                    unite_dc_paths(&mut joined, model);
                 }
             }
         }

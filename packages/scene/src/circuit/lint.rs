@@ -91,7 +91,49 @@ impl Scope<'_, '_> {
                 kind(&p.model) && self.top_named(p.name.as_str()).name == instance.name
             })
         };
-        holds(|m| matches!(m, Model::VoltageSource(_))) && holds(|m| matches!(m, Model::Chip(_)))
+        let is_supply = |m: &Model| match m {
+            Model::VoltageSource(_) => true,
+            Model::Resistor(_)
+            | Model::Potentiometer(_)
+            | Model::CurrentSource(_)
+            | Model::Diode(_)
+            | Model::Led(_)
+            | Model::Zener(_)
+            | Model::LinearRegulator(_)
+            | Model::Npn(_)
+            | Model::Pnp(_)
+            | Model::Nmos(_)
+            | Model::Pmos(_)
+            | Model::Capacitor(_)
+            | Model::Inductor(_)
+            | Model::Relay(_)
+            | Model::Switch(_)
+            | Model::OpAmp(_)
+            | Model::AnalogTempSensor(_)
+            | Model::Chip(_) => false,
+        };
+        let is_chip = |m: &Model| match m {
+            Model::Chip(_) => true,
+            Model::Resistor(_)
+            | Model::Potentiometer(_)
+            | Model::VoltageSource(_)
+            | Model::CurrentSource(_)
+            | Model::Diode(_)
+            | Model::Led(_)
+            | Model::Zener(_)
+            | Model::LinearRegulator(_)
+            | Model::Npn(_)
+            | Model::Pnp(_)
+            | Model::Nmos(_)
+            | Model::Pmos(_)
+            | Model::Capacitor(_)
+            | Model::Inductor(_)
+            | Model::Relay(_)
+            | Model::Switch(_)
+            | Model::OpAmp(_)
+            | Model::AnalogTempSensor(_) => false,
+        };
+        holds(is_supply) && holds(is_chip)
     }
 
     /// The scene instance an engine part sits in, by the first segment of its flat name.
@@ -854,7 +896,7 @@ fn conduction_graph(
                     }
                 }
             }
-            _ => {}
+            Conduction::Fixes | Conduction::Limits | Conduction::Other => {}
         }
     }
     (group, adj)
@@ -932,10 +974,33 @@ fn led_no_resistor(s: &Scope, out: &mut Findings) {
         names[id.index()] = name.as_str();
     }
     for (_, part) in engine.parts() {
-        let marks = match part.model {
+        let marks = match &part.model {
             Model::Chip(_) => &mut chip,
-            ref model if model.conduction() == Conduction::Fixes => &mut fixed,
-            _ => continue,
+            model @ (Model::Resistor(_)
+            | Model::Potentiometer(_)
+            | Model::VoltageSource(_)
+            | Model::CurrentSource(_)
+            | Model::Diode(_)
+            | Model::Led(_)
+            | Model::Zener(_)
+            | Model::LinearRegulator(_)
+            | Model::Npn(_)
+            | Model::Pnp(_)
+            | Model::Nmos(_)
+            | Model::Pmos(_)
+            | Model::Capacitor(_)
+            | Model::Inductor(_)
+            | Model::Relay(_)
+            | Model::Switch(_)
+            | Model::OpAmp(_)
+            | Model::AnalogTempSensor(_)) => match model.conduction() {
+                Conduction::Fixes => &mut fixed,
+                Conduction::Passes
+                | Conduction::Switches(_, _)
+                | Conduction::Limits
+                | Conduction::Other
+                | Conduction::Contacts(_) => continue,
+            },
         };
         for net in part.model.pins() {
             marks[net.index()] = true;

@@ -119,7 +119,23 @@ pub(crate) fn passive(model: &Model) -> Option<Passive<'_>> {
             Kind::Active(_) => None,
         },
         Model::Relay(relay) => Some(Passive::Relay(relay)),
-        _ => None,
+        Model::Resistor(_)
+        | Model::Potentiometer(_)
+        | Model::VoltageSource(_)
+        | Model::CurrentSource(_)
+        | Model::Diode(_)
+        | Model::Led(_)
+        | Model::Zener(_)
+        | Model::LinearRegulator(_)
+        | Model::Npn(_)
+        | Model::Pnp(_)
+        | Model::Nmos(_)
+        | Model::Pmos(_)
+        | Model::Capacitor(_)
+        | Model::Inductor(_)
+        | Model::Switch(_)
+        | Model::OpAmp(_)
+        | Model::AnalogTempSensor(_) => None,
     }
 }
 
@@ -192,7 +208,9 @@ pub(crate) fn stamp(chip: Passive<'_>, state: State, stamp: &mut Stamp<'_>) {
     match (chip, state) {
         (Passive::Ne555(ne555), State::Ne555(state)) => ne555::stamp(ne555, state, stamp),
         (Passive::Relay(relay), State::Relay(state)) => relay::stamp(relay, state, stamp),
-        _ => unreachable!("a chip's state is its own kind's"),
+        (Passive::Ne555(_), State::Relay(_)) | (Passive::Relay(_), State::Ne555(_)) => {
+            unreachable!("a chip's state is its own kind's")
+        }
     }
 }
 
@@ -202,7 +220,9 @@ pub(crate) fn react(chip: Passive<'_>, state: &State, _before: &[bool], after: &
     match (chip, state) {
         (Passive::Ne555(_), State::Ne555(state)) => State::Ne555(ne555::react(*state, after)),
         (Passive::Relay(_), State::Relay(_)) => State::Relay(relay::react(after)),
-        _ => unreachable!("a chip's state is its own kind's"),
+        (Passive::Ne555(_), State::Relay(_)) | (Passive::Relay(_), State::Ne555(_)) => {
+            unreachable!("a chip's state is its own kind's")
+        }
     }
 }
 
@@ -219,7 +239,9 @@ pub(crate) fn levels(chip: Passive<'_>, state: &State, watched: &[bool]) -> Vec<
     match (chip, state) {
         (Passive::Ne555(_), State::Ne555(state)) => ne555::levels(*state, watched).to_vec(),
         (Passive::Relay(_), State::Relay(state)) => relay::levels(*state).to_vec(),
-        _ => unreachable!("a chip's state is its own kind's"),
+        (Passive::Ne555(_), State::Relay(_)) | (Passive::Relay(_), State::Ne555(_)) => {
+            unreachable!("a chip's state is its own kind's")
+        }
     }
 }
 

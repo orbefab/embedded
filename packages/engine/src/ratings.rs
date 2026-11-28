@@ -544,8 +544,26 @@ impl Ratings {
         for (_, part) in netlist.parts() {
             // A supply source's current rating is the most it delivers steadily. Every power
             // rating, on every kind, is the heat the part sheds.
-            let supply = matches!(part.model, Model::VoltageSource(_));
-            let surge = matches!(part.model, Model::Diode(_) | Model::Zener(_));
+            let (supply, surge) = match &part.model {
+                Model::VoltageSource(_) => (true, false),
+                Model::Diode(_) | Model::Zener(_) => (false, true),
+                Model::Resistor(_)
+                | Model::Potentiometer(_)
+                | Model::CurrentSource(_)
+                | Model::Led(_)
+                | Model::LinearRegulator(_)
+                | Model::Npn(_)
+                | Model::Pnp(_)
+                | Model::Nmos(_)
+                | Model::Pmos(_)
+                | Model::Capacitor(_)
+                | Model::Inductor(_)
+                | Model::Relay(_)
+                | Model::Switch(_)
+                | Model::OpAmp(_)
+                | Model::AnalogTempSensor(_)
+                | Model::Chip(_) => (false, false),
+            };
             for (kind, quantity, rating) in part.model.ratings() {
                 let quantity = Ref::Quantity(part.name.clone(), quantity);
                 let column = columns
@@ -684,7 +702,7 @@ impl Ratings {
         // A polarized capacitor and a regulator input use the same window. `vcc` is unread,
         // since `above` is `None` or fixed. Pin `b`, and the regulator's `gnd`, are the window's ground.
         for (_, part) in netlist.parts() {
-            let (pin_name, column, ground, below) = match &part.model {
+            let (pin_name, column, ground, below, above) = match &part.model {
                 Model::Capacitor(cap) => {
                     let Some(limit) = &cap.reverse_voltage else {
                         continue;
@@ -694,6 +712,7 @@ impl Ratings {
                         columns.net(cap.pins[0]),
                         columns.net(cap.pins[1]),
                         limit.si.get(),
+                        None,
                     )
                 }
                 Model::LinearRegulator(reg) => (
@@ -701,15 +720,27 @@ impl Ratings {
                     columns.net(reg.pins[0]),
                     columns.net(reg.pins[2]),
                     crate::chip::regulator::INPUT_FLOOR_V,
+                    reg.max_input
+                        .as_ref()
+                        .map(|max| Ceiling::Fixed(max.si.get())),
                 ),
-                _ => continue,
-            };
-            let above = match &part.model {
-                Model::LinearRegulator(reg) => reg
-                    .max_input
-                    .as_ref()
-                    .map(|max| Ceiling::Fixed(max.si.get())),
-                _ => None,
+                Model::Resistor(_)
+                | Model::Potentiometer(_)
+                | Model::VoltageSource(_)
+                | Model::CurrentSource(_)
+                | Model::Diode(_)
+                | Model::Led(_)
+                | Model::Zener(_)
+                | Model::Npn(_)
+                | Model::Pnp(_)
+                | Model::Nmos(_)
+                | Model::Pmos(_)
+                | Model::Inductor(_)
+                | Model::Relay(_)
+                | Model::Switch(_)
+                | Model::OpAmp(_)
+                | Model::AnalogTempSensor(_)
+                | Model::Chip(_) => continue,
             };
             windows.push(Window {
                 pin: Ref::Pin(part.name.clone(), Name::new(pin_name).expect("a pin name")),
@@ -837,7 +868,20 @@ impl Ratings {
                         excursion: None,
                     });
                 }
-                _ => {}
+                Model::VoltageSource(_)
+                | Model::CurrentSource(_)
+                | Model::Zener(_)
+                | Model::LinearRegulator(_)
+                | Model::Npn(_)
+                | Model::Pnp(_)
+                | Model::Nmos(_)
+                | Model::Pmos(_)
+                | Model::Capacitor(_)
+                | Model::Inductor(_)
+                | Model::Relay(_)
+                | Model::OpAmp(_)
+                | Model::AnalogTempSensor(_)
+                | Model::Chip(_) => {}
             }
         }
         let mut supplies = Vec::new();
@@ -938,7 +982,22 @@ impl Ratings {
                         });
                     }
                 }
-                _ => {}
+                Model::Resistor(_)
+                | Model::Potentiometer(_)
+                | Model::VoltageSource(_)
+                | Model::CurrentSource(_)
+                | Model::Diode(_)
+                | Model::Led(_)
+                | Model::Zener(_)
+                | Model::LinearRegulator(_)
+                | Model::Npn(_)
+                | Model::Pnp(_)
+                | Model::Nmos(_)
+                | Model::Pmos(_)
+                | Model::Capacitor(_)
+                | Model::Inductor(_)
+                | Model::Relay(_)
+                | Model::Switch(_) => {}
             }
         }
         Ratings {

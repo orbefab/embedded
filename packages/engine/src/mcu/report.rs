@@ -13,7 +13,21 @@ use crate::netlist::Chip;
 pub(crate) fn symbolize(chip: &Chip, pc: u32) -> Option<String> {
     match chip {
         Chip::Esp32s3(mcu) => mcu.firmware.symbolize(pc),
-        _ => None,
+        Chip::Ne555(_)
+        | Chip::Atmega328p(_)
+        | Chip::SpiReplay(_)
+        | Chip::St77916(_)
+        | Chip::Ssd1306(_)
+        | Chip::Hd44780I2c(_)
+        | Chip::Hd44780(_)
+        | Chip::Cst816(_)
+        | Chip::Dht22(_)
+        | Chip::Bmp280(_)
+        | Chip::Hc595(_)
+        | Chip::Max7219(_)
+        | Chip::Ws2812(_)
+        | Chip::PulsesReplay(_)
+        | Chip::Sg90(_) => None,
     }
 }
 

@@ -127,12 +127,46 @@ pub(crate) fn frame(view: View<'_>) -> &[u8] {
 ///
 /// Panics on a kind with no glass, or a frame that is not its kind's size.
 pub fn glass(panel: &Panel, frame: &[u8]) -> Vec<u8> {
-    match panel.kind {
-        "st77916" => crate::device::st77916::glass(panel.flags, frame),
-        "ssd1306" => crate::device::ssd1306::glass(panel, frame),
-        "hd44780_i2c" | "hd44780" => crate::device::hd44780::glass(panel, frame),
-        "max7219" => crate::device::max7219::glass(panel, frame),
-        kind => panic!("a {kind} has no glass"),
+    use crate::netlist::PartKind;
+    match PartKind::from_name(panel.kind) {
+        Some(PartKind::St77916) => crate::device::st77916::glass(panel.flags, frame),
+        Some(PartKind::Ssd1306) => crate::device::ssd1306::glass(panel, frame),
+        Some(PartKind::Hd44780I2c | PartKind::Hd44780) => {
+            crate::device::hd44780::glass(panel, frame)
+        }
+        Some(PartKind::Max7219) => crate::device::max7219::glass(panel, frame),
+        Some(
+            PartKind::Resistor
+            | PartKind::Potentiometer
+            | PartKind::VoltageSource
+            | PartKind::CurrentSource
+            | PartKind::Diode
+            | PartKind::Led
+            | PartKind::Zener
+            | PartKind::LinearRegulator
+            | PartKind::Npn
+            | PartKind::Pnp
+            | PartKind::Nmos
+            | PartKind::Pmos
+            | PartKind::Capacitor
+            | PartKind::Inductor
+            | PartKind::Relay
+            | PartKind::Switch
+            | PartKind::OpAmp
+            | PartKind::AnalogTempSensor
+            | PartKind::Ne555
+            | PartKind::Atmega328p
+            | PartKind::SpiReplay
+            | PartKind::Cst816
+            | PartKind::Dht22
+            | PartKind::Bmp280
+            | PartKind::Esp32s3
+            | PartKind::Ws2812
+            | PartKind::PulsesReplay
+            | PartKind::Hc595
+            | PartKind::Sg90,
+        )
+        | None => panic!("a {} has no glass", panel.kind),
     }
 }
 
@@ -143,11 +177,46 @@ const RGBA: usize = 4;
 /// least half scale. A character LCD's backlit glass is blue at that brightness everywhere, so
 /// there a pixel reads lit only when all three channels are, as its white dots are.
 fn lit(kind: &str, pixel: &[u8]) -> bool {
+    use crate::netlist::PartKind;
     let bright = |channel: &u8| *channel >= 128;
     pixel[3] == 255
-        && match kind {
-            "hd44780" | "hd44780_i2c" => pixel[..3].iter().all(bright),
-            _ => pixel[..3].iter().any(bright),
+        && match PartKind::from_name(kind) {
+            Some(PartKind::Hd44780 | PartKind::Hd44780I2c) => pixel[..3].iter().all(bright),
+            Some(
+                PartKind::Resistor
+                | PartKind::Potentiometer
+                | PartKind::VoltageSource
+                | PartKind::CurrentSource
+                | PartKind::Diode
+                | PartKind::Led
+                | PartKind::Zener
+                | PartKind::LinearRegulator
+                | PartKind::Npn
+                | PartKind::Pnp
+                | PartKind::Nmos
+                | PartKind::Pmos
+                | PartKind::Capacitor
+                | PartKind::Inductor
+                | PartKind::Relay
+                | PartKind::Switch
+                | PartKind::OpAmp
+                | PartKind::AnalogTempSensor
+                | PartKind::Ne555
+                | PartKind::Atmega328p
+                | PartKind::SpiReplay
+                | PartKind::St77916
+                | PartKind::Ssd1306
+                | PartKind::Cst816
+                | PartKind::Dht22
+                | PartKind::Bmp280
+                | PartKind::Esp32s3
+                | PartKind::Ws2812
+                | PartKind::PulsesReplay
+                | PartKind::Hc595
+                | PartKind::Max7219
+                | PartKind::Sg90,
+            )
+            | None => pixel[..3].iter().any(bright),
         }
 }
 

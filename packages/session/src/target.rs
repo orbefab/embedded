@@ -185,12 +185,90 @@ pub(crate) fn backlight_reading(part: &MapPart) -> Option<&str> {
         .map(|(name, _)| name.as_str())
 }
 
+fn is_lcd_kind(kind: orbe_engine::netlist::PartKind) -> bool {
+    use orbe_engine::netlist::PartKind;
+    match kind {
+        PartKind::Hd44780 | PartKind::Hd44780I2c => true,
+        PartKind::Resistor
+        | PartKind::Potentiometer
+        | PartKind::VoltageSource
+        | PartKind::CurrentSource
+        | PartKind::Diode
+        | PartKind::Led
+        | PartKind::Zener
+        | PartKind::LinearRegulator
+        | PartKind::Npn
+        | PartKind::Pnp
+        | PartKind::Nmos
+        | PartKind::Pmos
+        | PartKind::Capacitor
+        | PartKind::Inductor
+        | PartKind::Relay
+        | PartKind::Switch
+        | PartKind::OpAmp
+        | PartKind::AnalogTempSensor
+        | PartKind::Ne555
+        | PartKind::Atmega328p
+        | PartKind::SpiReplay
+        | PartKind::St77916
+        | PartKind::Ssd1306
+        | PartKind::Cst816
+        | PartKind::Dht22
+        | PartKind::Bmp280
+        | PartKind::Esp32s3
+        | PartKind::Ws2812
+        | PartKind::PulsesReplay
+        | PartKind::Hc595
+        | PartKind::Max7219
+        | PartKind::Sg90 => false,
+    }
+}
+
+fn is_matrix_brightness_kind(kind: orbe_engine::netlist::PartKind) -> bool {
+    use orbe_engine::netlist::PartKind;
+    match kind {
+        PartKind::Max7219 => true,
+        PartKind::Resistor
+        | PartKind::Potentiometer
+        | PartKind::VoltageSource
+        | PartKind::CurrentSource
+        | PartKind::Diode
+        | PartKind::Led
+        | PartKind::Zener
+        | PartKind::LinearRegulator
+        | PartKind::Npn
+        | PartKind::Pnp
+        | PartKind::Nmos
+        | PartKind::Pmos
+        | PartKind::Capacitor
+        | PartKind::Inductor
+        | PartKind::Relay
+        | PartKind::Switch
+        | PartKind::OpAmp
+        | PartKind::AnalogTempSensor
+        | PartKind::Ne555
+        | PartKind::Atmega328p
+        | PartKind::SpiReplay
+        | PartKind::St77916
+        | PartKind::Ssd1306
+        | PartKind::Hd44780I2c
+        | PartKind::Hd44780
+        | PartKind::Cst816
+        | PartKind::Dht22
+        | PartKind::Bmp280
+        | PartKind::Esp32s3
+        | PartKind::Ws2812
+        | PartKind::PulsesReplay
+        | PartKind::Hc595
+        | PartKind::Sg90 => false,
+    }
+}
+
 /// The one character-LCD engine part (`hd44780` or `hd44780_i2c`) at `path` or among its
 /// descendants.
 pub(crate) fn lcd_engine(map: &RefMap, path: &str) -> Result<String, Error> {
     let mut found = Vec::new();
-    collect_kind(map, path, "hd44780", &mut found);
-    collect_kind(map, path, "hd44780_i2c", &mut found);
+    collect_kind(map, path, is_lcd_kind, &mut found);
     match found.as_slice() {
         [one] => Ok(one.clone()),
         [] => Err(Error::new(
@@ -229,21 +307,26 @@ pub(crate) fn screen_engines(map: &RefMap, path: &str) -> Vec<(String, String)> 
 /// Whether `path` or its descendants include at least one `max7219` engine part.
 pub(crate) fn has_max7219(map: &RefMap, path: &str) -> bool {
     let mut found = Vec::new();
-    collect_kind(map, path, "max7219", &mut found);
+    collect_kind(map, path, is_matrix_brightness_kind, &mut found);
     !found.is_empty()
 }
 
-fn collect_kind(map: &RefMap, path: &str, kind: &str, out: &mut Vec<String>) {
+fn collect_kind(
+    map: &RefMap,
+    path: &str,
+    predicate: fn(orbe_engine::netlist::PartKind) -> bool,
+    out: &mut Vec<String>,
+) {
     let Some(part) = map.parts.get(path) else {
         return;
     };
     for engine in &part.engine {
-        if engine.kind == kind {
+        if orbe_engine::netlist::PartKind::from_name(&engine.kind).is_some_and(predicate) {
             out.push(engine.name.clone());
         }
     }
     for child in &part.children {
-        collect_kind(map, &format!("{path}.{child}"), kind, out);
+        collect_kind(map, &format!("{path}.{child}"), predicate, out);
     }
 }
 

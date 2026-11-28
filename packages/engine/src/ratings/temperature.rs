@@ -41,8 +41,26 @@ pub(super) fn watches(netlist: &Netlist, columns: &Columns) -> Vec<TemperatureWa
     netlist
         .parts()
         .filter_map(|(_, part)| {
-            let Model::Chip(chip) = &part.model else {
-                return None;
+            let chip = match &part.model {
+                Model::Chip(chip) => chip,
+                Model::Resistor(_)
+                | Model::Potentiometer(_)
+                | Model::VoltageSource(_)
+                | Model::CurrentSource(_)
+                | Model::Diode(_)
+                | Model::Led(_)
+                | Model::Zener(_)
+                | Model::LinearRegulator(_)
+                | Model::Npn(_)
+                | Model::Pnp(_)
+                | Model::Nmos(_)
+                | Model::Pmos(_)
+                | Model::Capacitor(_)
+                | Model::Inductor(_)
+                | Model::Relay(_)
+                | Model::Switch(_)
+                | Model::OpAmp(_)
+                | Model::AnalogTempSensor(_) => return None,
             };
             let (range, supplies) = crate::chip::temperature_rating(chip)?;
             Some(TemperatureWatch {

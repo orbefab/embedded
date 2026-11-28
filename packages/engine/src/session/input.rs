@@ -275,38 +275,64 @@ fn decision(
     setting: &Setting,
     from: Time,
 ) -> Result<(Appended, Option<Time>, bool), Rejected> {
-    match (model, setting) {
-        (Model::Switch(switch), Setting::Contact(to)) => Ok((
-            Appended::Contact(*to),
-            switch.earliest(from),
-            *switch.schedule.after_last() == *to,
-        )),
-        (Model::Switch(_), Setting::Level(_)) => Err(Rejected::WrongSetting),
-        (Model::Potentiometer(pot), Setting::Level(level)) => {
-            if let Some(rule) = position_rule(level.get(), pot.resistance.si.get()).first() {
-                return Err(Rejected::Value(rule));
+    match model {
+        Model::Switch(switch) => match setting {
+            Setting::Contact(to) => Ok((
+                Appended::Contact(*to),
+                switch.earliest(from),
+                *switch.schedule.after_last() == *to,
+            )),
+            Setting::Level(_) => Err(Rejected::WrongSetting),
+            Setting::Event(event) => event_decision(model, event, from),
+            Setting::Serial(send) => serial_decision(model, send, from),
+        },
+        Model::Potentiometer(pot) => match setting {
+            Setting::Level(level) => {
+                if let Some(rule) = position_rule(level.get(), pot.resistance.si.get()).first() {
+                    return Err(Rejected::Value(rule));
+                }
+                Ok(level_decision(&pot.position, *level, from))
             }
-            Ok(level_decision(&pot.position, *level, from))
-        }
-        (Model::Potentiometer(_), Setting::Contact(_)) => Err(Rejected::WrongSetting),
-        (_, Setting::Event(event)) => event_decision(model, event, from),
-        (_, Setting::Serial(send)) => serial_decision(model, send, from),
-        (_, Setting::Contact(_)) => {
-            if model.serial().is_some() || model.level().is_some() {
-                Err(Rejected::WrongSetting)
-            } else {
-                Err(Rejected::NotSettable)
+            Setting::Contact(_) => Err(Rejected::WrongSetting),
+            Setting::Event(event) => event_decision(model, event, from),
+            Setting::Serial(send) => serial_decision(model, send, from),
+        },
+        Model::Resistor(_)
+        | Model::VoltageSource(_)
+        | Model::CurrentSource(_)
+        | Model::Diode(_)
+        | Model::Led(_)
+        | Model::Zener(_)
+        | Model::LinearRegulator(_)
+        | Model::Npn(_)
+        | Model::Pnp(_)
+        | Model::Nmos(_)
+        | Model::Pmos(_)
+        | Model::Capacitor(_)
+        | Model::Inductor(_)
+        | Model::Relay(_)
+        | Model::OpAmp(_)
+        | Model::AnalogTempSensor(_)
+        | Model::Chip(_) => match setting {
+            Setting::Event(event) => event_decision(model, event, from),
+            Setting::Serial(send) => serial_decision(model, send, from),
+            Setting::Contact(_) => {
+                if model.serial().is_some() || model.level().is_some() {
+                    Err(Rejected::WrongSetting)
+                } else {
+                    Err(Rejected::NotSettable)
+                }
             }
-        }
-        (_, Setting::Level(level)) => {
-            if model.serial().is_some() {
-                return Err(Rejected::WrongSetting);
+            Setting::Level(level) => {
+                if model.serial().is_some() {
+                    return Err(Rejected::WrongSetting);
+                }
+                let Some(field) = model.level() else {
+                    return Err(Rejected::NotSettable);
+                };
+                Ok(level_decision(field.schedule, *level, from))
             }
-            let Some(field) = model.level() else {
-                return Err(Rejected::NotSettable);
-            };
-            Ok(level_decision(field.schedule, *level, from))
-        }
+        },
     }
 }
 
@@ -339,7 +365,27 @@ fn serial_decision(
 }
 
 fn takes_another_setting(model: &Model) -> bool {
-    matches!(model, Model::Switch(_)) || model.level().is_some() || model.serial().is_some()
+    match model {
+        Model::Switch(_) => true,
+        Model::Resistor(_)
+        | Model::Potentiometer(_)
+        | Model::VoltageSource(_)
+        | Model::CurrentSource(_)
+        | Model::Diode(_)
+        | Model::Led(_)
+        | Model::Zener(_)
+        | Model::LinearRegulator(_)
+        | Model::Npn(_)
+        | Model::Pnp(_)
+        | Model::Nmos(_)
+        | Model::Pmos(_)
+        | Model::Capacitor(_)
+        | Model::Inductor(_)
+        | Model::Relay(_)
+        | Model::OpAmp(_)
+        | Model::AnalogTempSensor(_)
+        | Model::Chip(_) => model.level().is_some() || model.serial().is_some(),
+    }
 }
 
 fn event_decision(

@@ -1093,18 +1093,52 @@ impl<'p> Circuit<'p> {
                         .find(|(engine, _)| *engine == name)
                         .map(|(_, pin)| self.keys[&(inst, pin.clone())])
                 };
-                match body.kind.as_str() {
-                    "voltage_source" => {
+                match orbe_engine::netlist::PartKind::from_name(&body.kind) {
+                    Some(orbe_engine::netlist::PartKind::VoltageSource) => {
                         if let (Some(p), Some(n)) = (pin("p"), pin("n")) {
                             sources.push((inst, p, n));
                         }
                     }
-                    "diode" => {
+                    Some(orbe_engine::netlist::PartKind::Diode) => {
                         if let (Some(anode), Some(cathode)) = (pin("anode"), pin("cathode")) {
                             diodes.push((anode, cathode));
                         }
                     }
-                    _ => {}
+                    Some(
+                        orbe_engine::netlist::PartKind::Resistor
+                        | orbe_engine::netlist::PartKind::Potentiometer
+                        | orbe_engine::netlist::PartKind::CurrentSource
+                        | orbe_engine::netlist::PartKind::Led
+                        | orbe_engine::netlist::PartKind::Zener
+                        | orbe_engine::netlist::PartKind::LinearRegulator
+                        | orbe_engine::netlist::PartKind::Npn
+                        | orbe_engine::netlist::PartKind::Pnp
+                        | orbe_engine::netlist::PartKind::Nmos
+                        | orbe_engine::netlist::PartKind::Pmos
+                        | orbe_engine::netlist::PartKind::Capacitor
+                        | orbe_engine::netlist::PartKind::Inductor
+                        | orbe_engine::netlist::PartKind::Relay
+                        | orbe_engine::netlist::PartKind::Switch
+                        | orbe_engine::netlist::PartKind::OpAmp
+                        | orbe_engine::netlist::PartKind::AnalogTempSensor
+                        | orbe_engine::netlist::PartKind::Ne555
+                        | orbe_engine::netlist::PartKind::Atmega328p
+                        | orbe_engine::netlist::PartKind::SpiReplay
+                        | orbe_engine::netlist::PartKind::St77916
+                        | orbe_engine::netlist::PartKind::Ssd1306
+                        | orbe_engine::netlist::PartKind::Hd44780I2c
+                        | orbe_engine::netlist::PartKind::Hd44780
+                        | orbe_engine::netlist::PartKind::Cst816
+                        | orbe_engine::netlist::PartKind::Dht22
+                        | orbe_engine::netlist::PartKind::Bmp280
+                        | orbe_engine::netlist::PartKind::Esp32s3
+                        | orbe_engine::netlist::PartKind::Ws2812
+                        | orbe_engine::netlist::PartKind::PulsesReplay
+                        | orbe_engine::netlist::PartKind::Hc595
+                        | orbe_engine::netlist::PartKind::Max7219
+                        | orbe_engine::netlist::PartKind::Sg90,
+                    )
+                    | None => {}
                 }
             }
         }

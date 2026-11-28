@@ -152,6 +152,32 @@ macro_rules! define_kinds {
             Chip(Chip),
         }
 
+        /// The closed set of engine part kind names, one variant per row of `define_kinds!`.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+        pub enum PartKind {
+            $($variant,)*
+            $($chip,)*
+        }
+
+        impl PartKind {
+            /// The engine kind named `name`, or `None` when `name` is not an engine kind.
+            pub fn from_name(name: &str) -> Option<PartKind> {
+                match name {
+                    $($name => Some(PartKind::$variant),)*
+                    $($chip_name => Some(PartKind::$chip),)*
+                    _ => None,
+                }
+            }
+
+            /// The netlist `"kind"` string for this kind.
+            pub const fn name(self) -> &'static str {
+                match self {
+                    $(PartKind::$variant => $name,)*
+                    $(PartKind::$chip => $chip_name,)*
+                }
+            }
+        }
+
         const KINDS: &[(&str, &[&str], usize)] = &[
             $(($name, $pins, required!($pins)),)*
             $(($chip_name, $chip_pins, required!($chip_pins $(, $required)?)),)*
@@ -403,9 +429,41 @@ pub fn engine_kinds() -> &'static [(&'static str, &'static [&'static str], usize
 /// [`Model::level`] holds: a potentiometer's `position`. A source has a settable level only on a
 /// `steps` waveform, so it has none here. `None` for a kind no input changes this way.
 pub fn live_field(kind: &str) -> Option<&'static str> {
-    match kind {
-        "potentiometer" => Some(crate::passive::Potentiometer::LEVEL),
-        _ => None,
+    match PartKind::from_name(kind)? {
+        PartKind::Potentiometer => Some(crate::passive::Potentiometer::LEVEL),
+        PartKind::Resistor
+        | PartKind::VoltageSource
+        | PartKind::CurrentSource
+        | PartKind::Diode
+        | PartKind::Led
+        | PartKind::Zener
+        | PartKind::LinearRegulator
+        | PartKind::Npn
+        | PartKind::Pnp
+        | PartKind::Nmos
+        | PartKind::Pmos
+        | PartKind::Capacitor
+        | PartKind::Inductor
+        | PartKind::Relay
+        | PartKind::Switch
+        | PartKind::OpAmp
+        | PartKind::AnalogTempSensor
+        | PartKind::Ne555
+        | PartKind::Atmega328p
+        | PartKind::SpiReplay
+        | PartKind::St77916
+        | PartKind::Ssd1306
+        | PartKind::Hd44780I2c
+        | PartKind::Hd44780
+        | PartKind::Cst816
+        | PartKind::Dht22
+        | PartKind::Bmp280
+        | PartKind::Esp32s3
+        | PartKind::Ws2812
+        | PartKind::PulsesReplay
+        | PartKind::Hc595
+        | PartKind::Max7219
+        | PartKind::Sg90 => None,
     }
 }
 

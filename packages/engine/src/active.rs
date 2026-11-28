@@ -223,11 +223,27 @@ impl Clone for Core {
     /// decoded instructions, so a landing leaves the running core's table in place and a rewind
     /// starts that core empty.
     fn clone_from(&mut self, source: &Self) {
-        match (self, source) {
-            (Core::Device(core), Core::Device(source)) => core.copy_from(&**source),
-            (Core::Mcu(mcu), Core::Mcu(source)) => mcu.clone_from(source),
-            (Core::Net(net), Core::Net(source)) => net.clone_from(source),
-            (core, source) => *core = source.clone(),
+        match self {
+            Core::Device(core) => match source {
+                Core::Device(source) => core.copy_from(&**source),
+                Core::Mcu(_) | Core::Net(_) => *self = source.clone(),
+                #[cfg(test)]
+                Core::Script(_) => *self = source.clone(),
+            },
+            Core::Mcu(mcu) => match source {
+                Core::Mcu(source) => mcu.clone_from(source),
+                Core::Device(_) | Core::Net(_) => *self = source.clone(),
+                #[cfg(test)]
+                Core::Script(_) => *self = source.clone(),
+            },
+            Core::Net(net) => match source {
+                Core::Net(source) => net.clone_from(source),
+                Core::Device(_) | Core::Mcu(_) => *self = source.clone(),
+                #[cfg(test)]
+                Core::Script(_) => *self = source.clone(),
+            },
+            #[cfg(test)]
+            Core::Script(_) => *self = source.clone(),
         }
     }
 }
@@ -1164,7 +1180,9 @@ impl Actives {
     fn shown(&self, is: impl Fn(Shows) -> bool) -> impl Iterator<Item = &dyn Hosted> {
         self.committed.iter().filter_map(move |core| match core {
             Core::Device(dev) if is(dev.shows()) => Some(&**dev),
-            _ => None,
+            Core::Device(_) | Core::Mcu(_) | Core::Net(_) => None,
+            #[cfg(test)]
+            Core::Script(_) => None,
         })
     }
 
@@ -1500,7 +1518,11 @@ impl Actives {
                 Core::Device(dev) => dev.in_flight(at),
                 Core::Mcu(chip) => match &ahead.core {
                     Core::Mcu(copy) => chip.in_flight(copy, at),
-                    _ => unreachable!("a copy is of its core's kind"),
+                    Core::Device(_) | Core::Net(_) => {
+                        unreachable!("a copy is of its core's kind")
+                    }
+                    #[cfg(test)]
+                    Core::Script(_) => unreachable!("a copy is of its core's kind"),
                 },
                 Core::Net(_) => Vec::new(),
                 #[cfg(test)]
@@ -1688,19 +1710,43 @@ impl Actives {
 
 /// The netlist chip of a microcontroller's part.
 fn model<'c>(circuit: &'c Circuit, chip: &Chip) -> &'c crate::netlist::Chip {
+    use crate::netlist::Model;
     let part = chip.part.expect("a microcontroller is a part");
     match &circuit.netlist.part(part).model {
-        crate::netlist::Model::Chip(model) => model,
-        _ => unreachable!("a microcontroller's core belongs to a chip part"),
+        Model::Chip(model) => model,
+        Model::Resistor(_)
+        | Model::Potentiometer(_)
+        | Model::VoltageSource(_)
+        | Model::CurrentSource(_)
+        | Model::Diode(_)
+        | Model::Led(_)
+        | Model::Zener(_)
+        | Model::LinearRegulator(_)
+        | Model::Npn(_)
+        | Model::Pnp(_)
+        | Model::Nmos(_)
+        | Model::Pmos(_)
+        | Model::Capacitor(_)
+        | Model::Inductor(_)
+        | Model::Relay(_)
+        | Model::Switch(_)
+        | Model::OpAmp(_)
+        | Model::AnalogTempSensor(_) => {
+            unreachable!("a microcontroller's core belongs to a chip part")
+        }
     }
 }
 
 /// The name of a chip's part. A test's script chip is no part and carries its own.
 fn name(circuit: &Circuit, chip: &Chip) -> Name {
-    match (chip.part, &chip.core) {
-        (Some(part), _) => circuit.netlist.part(part).name.clone(),
-        #[cfg(test)]
-        (None, Core::Script(core)) => core.name(),
-        (None, _) => unreachable!("only a test's script chip and the network are no part"),
+    match chip.part {
+        Some(part) => circuit.netlist.part(part).name.clone(),
+        None => match &chip.core {
+            #[cfg(test)]
+            Core::Script(core) => core.name(),
+            Core::Device(_) | Core::Mcu(_) | Core::Net(_) => {
+                unreachable!("only a test's script chip and the network are no part")
+            }
+        },
     }
 }

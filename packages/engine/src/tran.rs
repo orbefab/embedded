@@ -413,7 +413,24 @@ fn switches(netlist: &Netlist, end: Time) -> BTreeMap<Ref, Vec<Edge>> {
                     .copied()
                     .collect(),
             )),
-            _ => None,
+            Model::Resistor(_)
+            | Model::Potentiometer(_)
+            | Model::VoltageSource(_)
+            | Model::CurrentSource(_)
+            | Model::Diode(_)
+            | Model::Led(_)
+            | Model::Zener(_)
+            | Model::LinearRegulator(_)
+            | Model::Npn(_)
+            | Model::Pnp(_)
+            | Model::Nmos(_)
+            | Model::Pmos(_)
+            | Model::Capacitor(_)
+            | Model::Inductor(_)
+            | Model::Relay(_)
+            | Model::OpAmp(_)
+            | Model::AnalogTempSensor(_)
+            | Model::Chip(_) => None,
         })
         .collect()
 }

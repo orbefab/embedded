@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use serde_json::{Map, Value};
 
-use orbe_engine::netlist::{MIN_GAP_PS, engine_kinds};
+use orbe_engine::netlist::{MIN_GAP_PS, PartKind, engine_kinds};
 use orbe_engine::world::Quantity;
 
 use crate::diagnostic::{Code, Findings, Reported};
@@ -1669,10 +1669,52 @@ fn check_angle(readings: &Node, format: u32, out: &mut Findings) {
     }
 }
 
+fn is_angle_kind(kind: PartKind) -> bool {
+    match kind {
+        PartKind::Sg90 => true,
+        PartKind::Resistor
+        | PartKind::Potentiometer
+        | PartKind::VoltageSource
+        | PartKind::CurrentSource
+        | PartKind::Diode
+        | PartKind::Led
+        | PartKind::Zener
+        | PartKind::LinearRegulator
+        | PartKind::Npn
+        | PartKind::Pnp
+        | PartKind::Nmos
+        | PartKind::Pmos
+        | PartKind::Capacitor
+        | PartKind::Inductor
+        | PartKind::Relay
+        | PartKind::Switch
+        | PartKind::OpAmp
+        | PartKind::AnalogTempSensor
+        | PartKind::Ne555
+        | PartKind::Atmega328p
+        | PartKind::SpiReplay
+        | PartKind::St77916
+        | PartKind::Ssd1306
+        | PartKind::Hd44780I2c
+        | PartKind::Hd44780
+        | PartKind::Cst816
+        | PartKind::Dht22
+        | PartKind::Bmp280
+        | PartKind::Esp32s3
+        | PartKind::Ws2812
+        | PartKind::PulsesReplay
+        | PartKind::Hc595
+        | PartKind::Max7219 => false,
+    }
+}
+
 /// Only a servo has a shaft angle, so `"of": "angle"` needs a model of kind `sg90`.
 fn check_angle_kind(readings: &Node, model: Option<&Node>, out: &mut Findings) {
-    let kind = model.and_then(|m| m.get("kind")).and_then(Node::str);
-    if kind == Some("sg90") {
+    let kind = model
+        .and_then(|m| m.get("kind"))
+        .and_then(Node::str)
+        .and_then(PartKind::from_name);
+    if kind.is_some_and(is_angle_kind) {
         return;
     }
     for prop in readings.props().unwrap_or_default() {
@@ -1708,10 +1750,52 @@ fn check_rgb(readings: &Node, format: u32, out: &mut Findings) {
     }
 }
 
+fn is_rgb_kind(kind: PartKind) -> bool {
+    match kind {
+        PartKind::Ws2812 => true,
+        PartKind::Resistor
+        | PartKind::Potentiometer
+        | PartKind::VoltageSource
+        | PartKind::CurrentSource
+        | PartKind::Diode
+        | PartKind::Led
+        | PartKind::Zener
+        | PartKind::LinearRegulator
+        | PartKind::Npn
+        | PartKind::Pnp
+        | PartKind::Nmos
+        | PartKind::Pmos
+        | PartKind::Capacitor
+        | PartKind::Inductor
+        | PartKind::Relay
+        | PartKind::Switch
+        | PartKind::OpAmp
+        | PartKind::AnalogTempSensor
+        | PartKind::Ne555
+        | PartKind::Atmega328p
+        | PartKind::SpiReplay
+        | PartKind::St77916
+        | PartKind::Ssd1306
+        | PartKind::Hd44780I2c
+        | PartKind::Hd44780
+        | PartKind::Cst816
+        | PartKind::Dht22
+        | PartKind::Bmp280
+        | PartKind::Esp32s3
+        | PartKind::PulsesReplay
+        | PartKind::Hc595
+        | PartKind::Max7219
+        | PartKind::Sg90 => false,
+    }
+}
+
 /// Only an LED chain has a colour, so `"of": "rgb"` needs a model of kind `ws2812`.
 fn check_rgb_kind(readings: &Node, model: Option<&Node>, out: &mut Findings) {
-    let kind = model.and_then(|m| m.get("kind")).and_then(Node::str);
-    if kind == Some("ws2812") {
+    let kind = model
+        .and_then(|m| m.get("kind"))
+        .and_then(Node::str)
+        .and_then(PartKind::from_name);
+    if kind.is_some_and(is_rgb_kind) {
         return;
     }
     for prop in readings.props().unwrap_or_default() {
@@ -1756,11 +1840,50 @@ fn check_screen(readings: &Node, format: u32, out: &mut Findings) {
     }
 }
 
+fn is_screen_kind(kind: PartKind) -> bool {
+    match kind {
+        PartKind::Ssd1306 | PartKind::Hd44780I2c | PartKind::Hd44780 | PartKind::Max7219 => true,
+        PartKind::Resistor
+        | PartKind::Potentiometer
+        | PartKind::VoltageSource
+        | PartKind::CurrentSource
+        | PartKind::Diode
+        | PartKind::Led
+        | PartKind::Zener
+        | PartKind::LinearRegulator
+        | PartKind::Npn
+        | PartKind::Pnp
+        | PartKind::Nmos
+        | PartKind::Pmos
+        | PartKind::Capacitor
+        | PartKind::Inductor
+        | PartKind::Relay
+        | PartKind::Switch
+        | PartKind::OpAmp
+        | PartKind::AnalogTempSensor
+        | PartKind::Ne555
+        | PartKind::Atmega328p
+        | PartKind::SpiReplay
+        | PartKind::St77916
+        | PartKind::Cst816
+        | PartKind::Dht22
+        | PartKind::Bmp280
+        | PartKind::Esp32s3
+        | PartKind::Ws2812
+        | PartKind::PulsesReplay
+        | PartKind::Hc595
+        | PartKind::Sg90 => false,
+    }
+}
+
 /// Only a screen controller has a screen, so `"of": "screen"` needs a model of a kind that
 /// shows one.
 fn check_screen_kind(readings: &Node, model: Option<&Node>, out: &mut Findings) {
-    let kind = model.and_then(|m| m.get("kind")).and_then(Node::str);
-    if kind.is_some_and(|kind| SCREEN_KINDS.contains(&kind)) {
+    let kind = model
+        .and_then(|m| m.get("kind"))
+        .and_then(Node::str)
+        .and_then(PartKind::from_name);
+    if kind.is_some_and(is_screen_kind) {
         return;
     }
     for (key, of) in screen_readings(readings) {
@@ -1808,6 +1931,44 @@ fn check_text_and_backlight(readings: &Node, format: u32, out: &mut Findings) {
     }
 }
 
+fn is_text_kind(kind: PartKind) -> bool {
+    match kind {
+        PartKind::Hd44780I2c | PartKind::Hd44780 => true,
+        PartKind::Resistor
+        | PartKind::Potentiometer
+        | PartKind::VoltageSource
+        | PartKind::CurrentSource
+        | PartKind::Diode
+        | PartKind::Led
+        | PartKind::Zener
+        | PartKind::LinearRegulator
+        | PartKind::Npn
+        | PartKind::Pnp
+        | PartKind::Nmos
+        | PartKind::Pmos
+        | PartKind::Capacitor
+        | PartKind::Inductor
+        | PartKind::Relay
+        | PartKind::Switch
+        | PartKind::OpAmp
+        | PartKind::AnalogTempSensor
+        | PartKind::Ne555
+        | PartKind::Atmega328p
+        | PartKind::SpiReplay
+        | PartKind::St77916
+        | PartKind::Ssd1306
+        | PartKind::Cst816
+        | PartKind::Dht22
+        | PartKind::Bmp280
+        | PartKind::Esp32s3
+        | PartKind::Ws2812
+        | PartKind::PulsesReplay
+        | PartKind::Hc595
+        | PartKind::Max7219
+        | PartKind::Sg90 => false,
+    }
+}
+
 /// `"of": "text"` and `"of": "backlight"` read a character LCD controller, either directly on
 /// its leaf part or on a module assembled from one.
 fn check_text_and_backlight_kind(
@@ -1816,8 +1977,11 @@ fn check_text_and_backlight_kind(
     has_parts: bool,
     out: &mut Findings,
 ) {
-    let kind = model.and_then(|m| m.get("kind")).and_then(Node::str);
-    if has_parts || kind.is_some_and(|k| TEXT_KINDS.contains(&k)) {
+    let kind = model
+        .and_then(|m| m.get("kind"))
+        .and_then(Node::str)
+        .and_then(PartKind::from_name);
+    if has_parts || kind.is_some_and(is_text_kind) {
         return;
     }
     for prop in readings.props().unwrap_or_default() {
@@ -2787,15 +2951,43 @@ fn gate(out: &mut Findings, kind: &str, key: &str, span: Span, needs: u32, forma
 
 /// The keys [`BASIS_FORMAT`] adds to an engine model: `basis` on any rating, and the fields
 /// below on their kinds. A dotted key is a field of an object.
-fn basis_gate(node: &Node, kind: &str, format: u32, out: &mut Findings) {
+fn basis_gate(node: &Node, kind: PartKind, format: u32, out: &mut Findings) {
     let gated: &[&str] = match kind {
-        "ws2812" => &["draw", "min_supply"],
-        "linear_regulator" => &["ratings.input_voltage"],
-        "op_amp" => &["ratings"],
-        "npn" | "pnp" => &["forward_knee_current"],
-        "capacitor" => &["series_resistance.tan_delta", "series_resistance.frequency"],
-        _ => &[],
+        PartKind::Ws2812 => &["draw", "min_supply"],
+        PartKind::LinearRegulator => &["ratings.input_voltage"],
+        PartKind::OpAmp => &["ratings"],
+        PartKind::Npn | PartKind::Pnp => &["forward_knee_current"],
+        PartKind::Capacitor => &["series_resistance.tan_delta", "series_resistance.frequency"],
+        PartKind::Resistor
+        | PartKind::Potentiometer
+        | PartKind::VoltageSource
+        | PartKind::CurrentSource
+        | PartKind::Diode
+        | PartKind::Led
+        | PartKind::Zener
+        | PartKind::Nmos
+        | PartKind::Pmos
+        | PartKind::Inductor
+        | PartKind::Relay
+        | PartKind::Switch
+        | PartKind::AnalogTempSensor
+        | PartKind::Ne555
+        | PartKind::Atmega328p
+        | PartKind::SpiReplay
+        | PartKind::St77916
+        | PartKind::Ssd1306
+        | PartKind::Hd44780I2c
+        | PartKind::Hd44780
+        | PartKind::Cst816
+        | PartKind::Dht22
+        | PartKind::Bmp280
+        | PartKind::Esp32s3
+        | PartKind::PulsesReplay
+        | PartKind::Hc595
+        | PartKind::Max7219
+        | PartKind::Sg90 => &[],
     };
+    let kind_name = kind.name();
     for key in gated {
         let (parent, field) = key.rsplit_once('.').unwrap_or(("", key));
         let holder = if parent.is_empty() {
@@ -2809,7 +3001,7 @@ fn basis_gate(node: &Node, kind: &str, format: u32, out: &mut Findings) {
             .iter()
             .find(|prop| prop.key == *field)
         {
-            gate(out, kind, key, prop.key_span, BASIS_FORMAT, format);
+            gate(out, kind_name, key, prop.key_span, BASIS_FORMAT, format);
         }
     }
     let ratings = node
@@ -2825,7 +3017,7 @@ fn basis_gate(node: &Node, kind: &str, format: u32, out: &mut Findings) {
             .find(|prop| prop.key == "basis")
         {
             let key = format!("ratings.{}.basis", rating.key);
-            gate(out, kind, &key, prop.key_span, BASIS_FORMAT, format);
+            gate(out, kind_name, &key, prop.key_span, BASIS_FORMAT, format);
         }
     }
 }
@@ -2893,10 +3085,43 @@ fn decode_body(
         );
         return None;
     };
+    let part_kind = PartKind::from_name(kind).expect("kind matched engine_kinds");
     if format < FIELD_FORMAT {
-        let gated: &[&str] = match kind {
-            "capacitor" => &["ratings", "series_resistance"],
-            _ => &[],
+        let gated: &[&str] = match part_kind {
+            PartKind::Capacitor => &["ratings", "series_resistance"],
+            PartKind::Resistor
+            | PartKind::Potentiometer
+            | PartKind::VoltageSource
+            | PartKind::CurrentSource
+            | PartKind::Diode
+            | PartKind::Led
+            | PartKind::Zener
+            | PartKind::LinearRegulator
+            | PartKind::Npn
+            | PartKind::Pnp
+            | PartKind::Nmos
+            | PartKind::Pmos
+            | PartKind::Inductor
+            | PartKind::Relay
+            | PartKind::Switch
+            | PartKind::OpAmp
+            | PartKind::AnalogTempSensor
+            | PartKind::Ne555
+            | PartKind::Atmega328p
+            | PartKind::SpiReplay
+            | PartKind::St77916
+            | PartKind::Ssd1306
+            | PartKind::Hd44780I2c
+            | PartKind::Hd44780
+            | PartKind::Cst816
+            | PartKind::Dht22
+            | PartKind::Bmp280
+            | PartKind::Esp32s3
+            | PartKind::Ws2812
+            | PartKind::PulsesReplay
+            | PartKind::Hc595
+            | PartKind::Max7219
+            | PartKind::Sg90 => &[],
         };
         for prop in node.props().unwrap_or_default() {
             if gated.contains(&prop.key.as_str()) {
@@ -2905,7 +3130,7 @@ fn decode_body(
         }
     }
     if format < BASIS_FORMAT {
-        basis_gate(node, kind, format, out);
+        basis_gate(node, part_kind, format, out);
     }
     if format < VOLTAGE_FORMAT {
         if kind == "resistor"
