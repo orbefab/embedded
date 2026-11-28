@@ -938,7 +938,7 @@ fn shown_message(code: &str, json: &Value) -> String {
     }
     if matches!(
         code,
-        "rating.voltage" | "rating.supply_low" | "rating.temperature"
+        "rating.voltage" | "rating.supply_low" | "rating.temperature" | "mosfet.body_diode"
     ) {
         return with_over(message, json);
     }
@@ -1685,5 +1685,17 @@ mod tests {
             assert_eq!(parsed.unit, Unit::Ampere, "{text}");
             assert_eq!(parsed.value, amperes, "{text}");
         }
+    }
+
+    #[test]
+    fn mosfet_body_diode_duration_prints_as_a_duration() {
+        let diag = serde_json::json!({
+            "message": "#m1 source sits 3.3 V above drain, past its 0.8 V body diode forward voltage; the body diode is not simulated, so a real part would conduct from source to drain for 2000000 ps",
+            "data": { "over_ps": 2_000_000u64 }
+        });
+        assert_eq!(
+            super::shown_message("mosfet.body_diode", &diag),
+            "#m1 source sits 3.3 V above drain, past its 0.8 V body diode forward voltage; the body diode is not simulated, so a real part would conduct from source to drain for 2us"
+        );
     }
 }

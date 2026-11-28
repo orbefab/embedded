@@ -1,7 +1,7 @@
 {
-  "format": 5,
+  "format": 7,
   "part": "nmos-irf520-to220",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "title": "N-channel MOSFET, IRF520 (TO-220)",
   "summary": "100 V, 9.2 A N-channel power MOSFET in TO-220. It is not logic-level: it turns fully on with a 10 V gate.",
   "tags": ["transistor", "mosfet", "nmos", "switch", "power", "motor", "through-hole"],
@@ -17,6 +17,7 @@
     "gate_source_capacitance": { "value": 3.26e-10, "unit": "F", "source": { "datasheet": { "doc": "Vishay IRF520, Document Number 91017, S21-0819-Rev. C, 02-Aug-2021", "at": "Dynamic, Ciss typical minus Crss typical, 360 pF minus 34 pF, VGS = 0 V, VDS = 25 V, f = 1.0 MHz", "basis": "typical" } } },
     "gate_drain_capacitance": { "value": 3.4e-11, "unit": "F", "source": { "datasheet": { "doc": "Vishay IRF520, Document Number 91017, S21-0819-Rev. C, 02-Aug-2021", "at": "Dynamic, Crss typical, VGS = 0 V, VDS = 25 V, f = 1.0 MHz", "basis": "typical" } } },
     "drain_source_capacitance": { "value": 1.16e-10, "unit": "F", "source": { "datasheet": { "doc": "Vishay IRF520, Document Number 91017, S21-0819-Rev. C, 02-Aug-2021", "at": "Dynamic, Coss typical minus Crss typical, 150 pF minus 34 pF, VGS = 0 V, VDS = 25 V, f = 1.0 MHz", "basis": "typical" } } },
+    "body_diode_forward_voltage": { "value": 0.67, "unit": "V", "source": { "datasheet": { "doc": "Vishay IRF520, Document Number 91017, S21-0819-Rev. C, 02-Aug-2021", "at": "Fig. 7, Typical Source-Drain Diode Forward Voltage, 25 C, VGS = 0 V, ISD = 0.1 A (Drain-Source Body Diode Characteristics VSD lists only 1.8 V maximum at IS = 9.2 A with no typical)", "basis": "typical" } } },
     "ratings": {
       "current": { "value": 9.2, "unit": "A", "basis": { "sustained": { "average": "rms", "tau": { "value": 0.0102, "unit": "s", "source": { "closed_form": { "note": "The sheet gives no pulse rating to fit, so this is the 10.2 ms default, five periods of a 490 Hz PWM." } } } } }, "source": { "datasheet": { "doc": "Vishay IRF520, Document Number 91017, S21-0819-Rev. C, 02-Aug-2021", "at": "ABSOLUTE MAXIMUM RATINGS, continuous drain current ID, VGS at 10 V, TC = 25 C", "basis": "absolute_max" } } },
       "power": { "value": 2.419, "unit": "W", "basis": { "sustained": { "average": "mean", "tau": { "value": 0.0102, "unit": "s", "source": { "closed_form": { "note": "The sheet gives no pulse rating to fit, so this is the 10.2 ms default, five periods of a 490 Hz PWM." } } } } }, "source": { "closed_form": { "note": "with no heat sink: (TJ maximum 175 C minus TA 25 C) over RthJA maximum 62 C/W, from the operating range and THERMAL RESISTANCE RATINGS of Vishay IRF520 Rev. C. The 60 W PD rating needs the case held at 25 C" } } },

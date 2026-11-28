@@ -693,14 +693,15 @@ For `vds < 0` the drain and source swap roles, so `id = -f(vgs - vds, -vds)`, wh
 | `gate_source_capacitance` | `CGS` | `F` |
 | `gate_drain_capacitance` | `CGD` | `F` |
 | `drain_source_capacitance` | `CDS` | `F` |
+| `body_diode_forward_voltage` | `VSD` | `V` (optional) |
 
-`transconductance_parameter` and the three capacitances must be greater than 0, and each reciprocal must be finite. Those are the resistor's rules. `threshold_voltage` must be finite, and it may be negative or zero. `channel_length_modulation` must be at least 0. A wrong unit on it reports `netlist.unit` and does not also report `non_negative`.
+`transconductance_parameter`, the three capacitances, and `body_diode_forward_voltage` (when present) must be greater than 0, and each reciprocal must be finite. Those are the resistor's rules. `threshold_voltage` must be finite, and it may be negative or zero. `channel_length_modulation` must be at least 0. A wrong unit on it reports `netlist.unit` and does not also report `non_negative`.
 
 `ratings` holds `current` and `power`. `current` bounds `|id|`.
 
 The model leaves out these effects.
 
-- The body diode. A discrete MOSFET conducts from source to drain when the drain goes below the source. This part does not. A circuit that needs that path adds a `diode` from source to drain.
+- The body diode. A discrete MOSFET conducts from source to drain when the drain goes below the source. This part does not. When `body_diode_forward_voltage` is set, reverse bias past it held for at least 1 us (or at an operating point) warns [`mosfet.body_diode`](diagnostics.md#mosfetbody_diode). A circuit that needs that path adds a `diode` from source to drain.
 - Body effect. The bulk is the source pin.
 - Series resistance at the drain and the source. The fit folds it into `KP`.
 - Subthreshold conduction. Below `VTO` the current is `GMIN * vds`.
@@ -732,7 +733,7 @@ The values are from 2N7000/D Rev. 5. `VTO` is 1.08 V and `KP` is 0.0468 A/V^2. T
 
 ### P-channel MOSFET
 
-`kind` is `pmos`. Pins, fields, ratings and the equations are the `nmos` ones, and every value stays positive, `threshold_voltage` included. The device is that `nmos` with each terminal voltage and the drain current negated, so it conducts when `V(gate) - V(source)` is below `-VTO`. `id` is negative when the channel sources current into a load tied to ground.
+`kind` is `pmos`. Pins, fields, ratings and the equations are the `nmos` ones, and every value stays positive, `threshold_voltage` and `body_diode_forward_voltage` included. The device is that `nmos` with each terminal voltage and the drain current negated, so it conducts when `V(gate) - V(source)` is below `-VTO`. `id` is negative when the channel sources current into a load tied to ground. When `body_diode_forward_voltage` is set, `V(drain) - V(source)` above it warns [`mosfet.body_diode`](diagnostics.md#mosfetbody_diode).
 
 `packages/engine/tests/circuits/pmos-high-side` is a 5 V source, a P-channel MOSFET and 10 ohm to ground. The gate sits at 5 V, then 0 V, then 5 V. While it is on, `#m1.id` is negative and `#m1.p` is positive. `packages/engine/tests/circuits/pmos-sweep` steps that gate from 5 V down to 0 V. The drain stays near ground until `|Vgs|` passes `VTO`, then rises toward the source. Both use the FDN340P fit from `parts/pmos-fdn340p-sot23`.
 

@@ -33,7 +33,8 @@ const SCENE_KEYS: &[&str] = &[
 /// `characterized` on a rating, `ratings.reverse_voltage` on `diode` and `led`, `ratings` on
 /// `potentiometer`, `switch`, `dht22`, `sg90`, `ne555`, `cst816` and `st77916`,
 /// `ratings.supply_min` (and `bmp280`'s `ratings.io_supply_min` and `ratings.temperature`), a
-/// composite part's `accepted_warnings`, and `start` and `bootloader` on `atmega328p`.
+/// composite part's `accepted_warnings`, `start` and `bootloader` on `atmega328p`, and
+/// `body_diode_forward_voltage` on `nmos` and `pmos`.
 pub const PART_FORMATS: &[u32] = &[1, 2, 3, 4, 5, 6, 7];
 /// Scene `format` values this binary reads.
 pub const SCENE_FORMATS: &[u32] = &[1];
@@ -55,7 +56,8 @@ const VOLTAGE_FORMAT: u32 = 6;
 /// maximum `ratings.voltage`, `characterized` ratings, `diode`/`led` `ratings.reverse_voltage`,
 /// `ratings` on `potentiometer`, `switch`, `dht22`, `sg90`, `ne555`, `cst816` and `st77916`,
 /// `ratings.supply_min` (and `bmp280`'s `io_supply_min` and `temperature`), `accepted_warnings`,
-/// and `atmega328p` `start` and `bootloader` (refused by orbe 0.3.1).
+/// `atmega328p` `start` and `bootloader`, and `nmos`/`pmos` `body_diode_forward_voltage` (refused
+/// by orbe 0.3.1).
 const RATINGS_FORMAT: u32 = 7;
 /// The oldest part format whose readings take `"of": "angle"`.
 const ANGLE_FORMAT: u32 = 6;
@@ -3039,6 +3041,22 @@ fn decode_body(
                     gate(out, kind, &prop.key, prop.key_span, RATINGS_FORMAT, format);
                 }
             }
+        }
+        if matches!(kind, "nmos" | "pmos")
+            && let Some(prop) = node
+                .props()
+                .unwrap_or_default()
+                .iter()
+                .find(|prop| prop.key == "body_diode_forward_voltage")
+        {
+            gate(
+                out,
+                kind,
+                "body_diode_forward_voltage",
+                prop.key_span,
+                RATINGS_FORMAT,
+                format,
+            );
         }
         let ratings = node
             .get("ratings")

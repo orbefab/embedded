@@ -627,6 +627,8 @@ pub enum Diagnostic {
     RegulatorCurrentLimit(CurrentLimitExcursion),
     /// The world's temperature left a part's operating temperature range.
     RatingTemperature(TemperatureExcursion),
+    /// A MOSFET was reverse-biased past its body diode's forward voltage, which the model omits.
+    MosfetBodyDiode(BodyDiodeExcursion),
 }
 
 /// Which record kind [`Diagnostic::ChipLinkUnsupported`] could not route faithfully.
@@ -761,6 +763,28 @@ pub struct CurrentLimitExcursion {
     pub over_ps: Option<u64>,
 }
 
+/// One MOSFET reverse-biased past its intrinsic body diode's forward voltage, merged over the
+/// whole run.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BodyDiodeExcursion {
+    /// `#<part>`.
+    pub part: Ref,
+    /// `"nmos"` or `"pmos"`.
+    pub channel: &'static str,
+    /// Datasheet body diode forward voltage (positive magnitude), in V.
+    pub forward_voltage: f64,
+    /// Largest reverse bias across the body diode (`V(source) - V(drain)` for `nmos`,
+    /// `V(drain) - V(source)` for `pmos`), in V.
+    pub peak: f64,
+    /// When `peak` occurred.
+    pub peak_at: Time,
+    /// First sample past `forward_voltage` in the triggering episode.
+    pub first: Time,
+    /// Total time held past `forward_voltage` across warning episodes. `None` for an operating
+    /// point, which has no duration.
+    pub over_ps: Option<u64>,
+}
+
 impl Diagnostic {
     pub fn code(&self) -> &'static str {
         match self {
@@ -814,6 +838,7 @@ impl Diagnostic {
             Diagnostic::RatingSupplyLow(_) => "rating.supply_low",
             Diagnostic::RegulatorCurrentLimit(_) => "regulator.current_limit",
             Diagnostic::RatingTemperature(_) => "rating.temperature",
+            Diagnostic::MosfetBodyDiode(_) => "mosfet.body_diode",
         }
     }
 
@@ -831,7 +856,8 @@ impl Diagnostic {
             | Diagnostic::RatingVoltage(_)
             | Diagnostic::RatingSupplyLow(_)
             | Diagnostic::RegulatorCurrentLimit(_)
-            | Diagnostic::RatingTemperature(_) => Severity::Warning,
+            | Diagnostic::RatingTemperature(_)
+            | Diagnostic::MosfetBodyDiode(_) => Severity::Warning,
             Diagnostic::NetlistSyntax { .. }
             | Diagnostic::NetlistVersion { .. }
             | Diagnostic::NetlistName { .. }
@@ -907,6 +933,7 @@ impl Diagnostic {
             Diagnostic::RatingSupplyLow(excursion) => Some(excursion.first),
             Diagnostic::RegulatorCurrentLimit(excursion) => Some(excursion.first),
             Diagnostic::RatingTemperature(excursion) => Some(excursion.first),
+            Diagnostic::MosfetBodyDiode(excursion) => Some(excursion.first),
             Diagnostic::NetlistSyntax { .. }
             | Diagnostic::NetlistVersion { .. }
             | Diagnostic::NetlistName { .. }
@@ -981,6 +1008,7 @@ impl Diagnostic {
             Diagnostic::RatingSupplyLow(excursion) => vec![excursion.pin.clone()],
             Diagnostic::RegulatorCurrentLimit(excursion) => vec![excursion.pin.clone()],
             Diagnostic::RatingTemperature(excursion) => vec![excursion.part.clone()],
+            Diagnostic::MosfetBodyDiode(excursion) => vec![excursion.part.clone()],
         }
     }
 
@@ -2033,6 +2061,7 @@ impl Diagnostic {
             Diagnostic::RatingSupplyLow(excursion) => supply_low(excursion, namer),
             Diagnostic::RegulatorCurrentLimit(excursion) => regulator_limit(excursion, namer),
             Diagnostic::RatingTemperature(excursion) => outside_temperature(excursion, namer),
+            Diagnostic::MosfetBodyDiode(excursion) => mosfet_body_diode(excursion, namer),
         }
     }
 
@@ -2328,6 +2357,15 @@ impl Diagnostic {
                     "peak_ps": excursion.peak_at,
                 })
             }
+            Diagnostic::MosfetBodyDiode(excursion) => {
+                serde_json::json!({
+                    "channel": excursion.channel,
+                    "forward_voltage": excursion.forward_voltage,
+                    "over_ps": excursion.over_ps,
+                    "peak": excursion.peak,
+                    "peak_ps": excursion.peak_at,
+                })
+            }
         }
     }
 }
@@ -2595,6 +2633,29 @@ fn regulator_limit(excursion: &CurrentLimitExcursion, namer: &dyn Fn(&Ref) -> St
         significant_text(*target),
         significant_text(*current),
         significant_text(*voltage),
+        for_time(*over_ps),
+    )
+}
+
+fn mosfet_body_diode(excursion: &BodyDiodeExcursion, namer: &dyn Fn(&Ref) -> String) -> String {
+    let BodyDiodeExcursion {
+        part,
+        channel,
+        forward_voltage,
+        peak,
+        over_ps,
+        ..
+    } = excursion;
+    let part = namer(part);
+    let (high, low) = if *channel == "pmos" {
+        ("drain", "source")
+    } else {
+        ("source", "drain")
+    };
+    format!(
+        "{part} {high} sits {} V above {low}, past its {} V body diode forward voltage; the body diode is not simulated, so a real part would conduct from {high} to {low}{}",
+        significant_text(*peak),
+        significant_text(*forward_voltage),
         for_time(*over_ps),
     )
 }

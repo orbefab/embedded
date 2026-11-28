@@ -1335,6 +1335,10 @@ pub struct Mosfet {
     pub gate_drain_capacitance: Value,
     /// Farad. From drain to source.
     pub drain_source_capacitance: Value,
+    /// Volt, greater than 0. Datasheet body diode forward voltage (magnitude for `pmos`).
+    /// Reverse bias past this threshold warns `mosfet.body_diode` because the model has no body
+    /// diode.
+    pub body_diode_forward_voltage: Option<Value>,
     /// Ampere, greater than 0. Bounds `|id|`. `None` is an explicit `"current": null`.
     pub max_current: Option<Rating>,
     /// Watt, greater than 0. `None` is an explicit `"power": null`.
@@ -1402,6 +1406,9 @@ pub(crate) struct WireMosfet {
     gate_source_capacitance: WireValue,
     gate_drain_capacitance: WireValue,
     drain_source_capacitance: WireValue,
+    /// Absent on a MOSFET written before it had one.
+    #[serde(default)]
+    body_diode_forward_voltage: Option<WireValue>,
     ratings: WireJunctionRatings,
 }
 
@@ -1557,6 +1564,12 @@ pub(crate) fn resolve_mosfet(ctx: ParseCtx<'_>, wire: WireMosfet) -> Option<Mosf
             Some(value)
         }
     });
+    let body_diode_forward_voltage = match wire.body_diode_forward_voltage {
+        None => Some(None),
+        Some(vf) => {
+            resolve_value(part_ref, "body_diode_forward_voltage", "V", true, vf, out).map(Some)
+        }
+    };
     let ratings = wire.ratings;
     let max_current = resolve_rating(part_ref, "ratings.current", "A", ratings.current, out);
     let max_power = resolve_rating(part_ref, "ratings.power", "W", ratings.power, out);
@@ -1568,6 +1581,7 @@ pub(crate) fn resolve_mosfet(ctx: ParseCtx<'_>, wire: WireMosfet) -> Option<Mosf
         gate_source_capacitance: cgs?,
         gate_drain_capacitance: cgd?,
         drain_source_capacitance: cds?,
+        body_diode_forward_voltage: body_diode_forward_voltage?,
         max_current: max_current?,
         max_power: max_power?,
     })

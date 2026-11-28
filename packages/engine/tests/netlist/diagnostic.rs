@@ -1,8 +1,8 @@
 use orbe_model::Time;
 
 use orbe_engine::diagnostic::{
-    AnalysisRule, CurrentLimitExcursion, Diagnostic, Excursion, LinkKind, ProtocolRule,
-    ScheduleRule, Severity, Solve, SupplyExcursion, ValueRule, WaveformRule,
+    AnalysisRule, BodyDiodeExcursion, CurrentLimitExcursion, Diagnostic, Excursion, LinkKind,
+    ProtocolRule, ScheduleRule, Severity, Solve, SupplyExcursion, ValueRule, WaveformRule,
 };
 use orbe_engine::name::{Name, NameError, Ref};
 use orbe_engine::netlist::{Average, Basis};
@@ -182,6 +182,15 @@ fn samples() -> Vec<Diagnostic> {
             first: Time::from_ps(8_000),
             over_ps: Some(2_000),
         }),
+        Diagnostic::MosfetBodyDiode(BodyDiodeExcursion {
+            part: part("m1"),
+            channel: "nmos",
+            forward_voltage: 0.8,
+            peak: 3.304,
+            peak_at: Time::from_ps(10_500),
+            first: Time::from_ps(9_500),
+            over_ps: Some(2_000_000),
+        }),
     ]
 }
 
@@ -219,7 +228,7 @@ fn codes_are_unique_and_match_the_grammar() {
         assert!(is_code(code), "{code}");
         assert!(seen.insert(code), "duplicate code {code}");
     }
-    assert_eq!(seen.len(), 28);
+    assert_eq!(seen.len(), 29);
 }
 
 /// `docs/engine/diagnostics.md` gives each code its own `## <code>` heading.
@@ -270,6 +279,7 @@ fn severity_refs_and_time_follow_the_variant() {
             "chip.link_unsupported",
             "rating.supply_low",
             "regulator.current_limit",
+            "mosfet.body_diode",
         ]
     );
     for diagnostic in &found {
@@ -277,6 +287,7 @@ fn severity_refs_and_time_follow_the_variant() {
         let warning = code == "net.floating"
             || code.starts_with("rating.")
             || code == "regulator.current_limit"
+            || code == "mosfet.body_diode"
             || code == "chip.protocol"
             || code == "chip.link_miswired";
         assert_eq!(diagnostic.severity() == Severity::Warning, warning);
@@ -296,6 +307,8 @@ fn severity_refs_and_time_follow_the_variant() {
             assert_eq!(diagnostic.at(), Some(Time::from_ps(8_500)));
         } else if code == "regulator.current_limit" {
             assert_eq!(diagnostic.at(), Some(Time::from_ps(8_000)));
+        } else if code == "mosfet.body_diode" {
+            assert_eq!(diagnostic.at(), Some(Time::from_ps(9_500)));
         } else {
             assert_eq!(diagnostic.at(), None);
         }
@@ -446,6 +459,11 @@ fn severity_refs_and_time_follow_the_variant() {
     assert_eq!(
         reg_limit,
         r##"{"code":"regulator.current_limit","severity":"warning","refs":["#u1.pin.out"],"t_ps":8000,"message":"#u1.pin.out regulator output can give 0.03 A at 3.3 V; the circuit asks for more, so it is giving 0.03 A and has dropped as low as 3 V for 2000 ps","data":{"current":0.030007,"limit":0.03,"over_ps":2000,"peak_ps":9000,"target":3.3,"voltage":3.003}}"##
+    );
+    let body_diode = serde_json::to_string(by_code(&found, "mosfet.body_diode")).unwrap();
+    assert_eq!(
+        body_diode,
+        r##"{"code":"mosfet.body_diode","severity":"warning","refs":["#m1"],"t_ps":9500,"message":"#m1 source sits 3.3 V above drain, past its 0.8 V body diode forward voltage; the body diode is not simulated, so a real part would conduct from source to drain for 2000000 ps","data":{"channel":"nmos","forward_voltage":0.8,"over_ps":2000000,"peak":3.304,"peak_ps":10500}}"##
     );
 }
 

@@ -1,7 +1,7 @@
 {
-  "format": 5,
+  "format": 7,
   "part": "nmos-bss138-sot23",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "title": "BSS138 N-channel MOSFET, SOT-23",
   "license": "MIT OR Apache-2.0",
   "summary": "onsemi BSS138 N-channel logic-level MOSFET in SOT-23, for 50 V and 0.22 A. The dot marks lead 1.",
@@ -75,6 +75,17 @@
         "datasheet": {
           "doc": "onsemi BSS138/D, Rev. 7, April 2024",
           "at": "Dynamic Characteristics, Coss typical minus Crss typical, 13 pF minus 6 pF, VDS = 25 V, VGS = 0 V, f = 1.0 MHz",
+          "basis": "typical",
+        },
+      },
+    },
+    "body_diode_forward_voltage": {
+      "value": 0.8,
+      "unit": "V",
+      "source": {
+        "datasheet": {
+          "doc": "onsemi BSS138/D, Rev. 7, April 2024",
+          "at": "Drain-Source Diode Characteristics and Maximum Ratings, VSD typical 0.8 V (1.4 V maximum) at VGS = 0 V, IS = 0.44 A",
           "basis": "typical",
         },
       },

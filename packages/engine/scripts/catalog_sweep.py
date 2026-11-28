@@ -251,6 +251,7 @@ def extract_single_model(label, kind, model, params):
     clean.pop("kind", None)
     clean.pop("pins", None)
     clean.pop("ratings", None)
+    clean.pop("body_diode_forward_voltage", None)
 
     if kind == "led" and "color" in params and "choices" in params["color"]:
         out = []

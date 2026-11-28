@@ -7,7 +7,7 @@
 {
   "format": 5,
   "part": "bss138-level-shifter",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "title": "BSS138 level shifter, 4 channel",
   "summary": "Four-channel bidirectional logic level shifter built from BSS138 MOSFETs and 10 kohm pull-ups. HV takes the higher supply, such as 5 V, and LV the lower, such as 3.3 V.",
   "tags": ["level-shifter", "i2c", "bss138", "module"],
@@ -26,7 +26,7 @@
     { "seller": "SparkFun", "url": "https://www.sparkfun.com/sparkfun-logic-level-converter-bi-directional.html", "checked": "2026-11-23" },
   ],
   "uses": {
-    "nmos-bss138-sot23": "0.1.1",
+    "nmos-bss138-sot23": "0.1.2",
     "pin-header-1x6": "0.1.0",
     "resistor-0603": "0.2.0",
   },
